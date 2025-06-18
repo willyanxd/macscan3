@@ -35,7 +35,7 @@ const jobScheduler = new JobScheduler(database, notificationService);
 // Create HTTP server
 const server = createServer(app);
 
-// Setup WebSocket server for real-time notifications
+// Setup WebSocket server for real-time notifications and job status
 const wss = new WebSocketServer({ 
   server,
   cors: {
@@ -47,6 +47,13 @@ const wss = new WebSocketServer({
 wss.on('connection', (ws, req) => {
   console.log(`Client connected to WebSocket from ${req.socket.remoteAddress}`);
   
+  // Send initial connection confirmation
+  ws.send(JSON.stringify({
+    type: 'connection',
+    message: 'Connected to MAC Scanner WebSocket',
+    timestamp: new Date().toISOString()
+  }));
+  
   ws.on('close', () => {
     console.log('Client disconnected from WebSocket');
   });
@@ -54,21 +61,37 @@ wss.on('connection', (ws, req) => {
   ws.on('error', (error) => {
     console.error('WebSocket error:', error);
   });
+
+  // Handle ping/pong for connection health
+  ws.on('ping', () => {
+    ws.pong();
+  });
 });
 
-// Attach WebSocket server to notification service
+// Attach WebSocket server and database to notification service
 notificationService.setWebSocketServer(wss);
+notificationService.setDatabase(database);
 
 // Setup routes
 setupRoutes(app, database, jobScheduler, notificationService);
 
-// Health check endpoint
+// Health check endpoint with enhanced information
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    memory: process.memoryUsage()
+    memory: process.memoryUsage(),
+    websocket_clients: wss.clients.size,
+    running_jobs: jobScheduler.runningJobs?.size || 0
+  });
+});
+
+// WebSocket health endpoint
+app.get('/api/websocket/status', (req, res) => {
+  res.json({
+    connected_clients: wss.clients.size,
+    server_status: 'running'
   });
 });
 
@@ -98,9 +121,29 @@ async function startServer() {
     
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
-      console.log(`📡 WebSocket server ready for real-time notifications`);
+      console.log(`📡 WebSocket server ready for real-time updates`);
       console.log(`🌐 API accessible from network at http://[YOUR_IP]:${PORT}/api`);
+      console.log(`🔧 Health check available at http://[YOUR_IP]:${PORT}/health`);
     });
+
+    // Setup WebSocket heartbeat
+    const interval = setInterval(() => {
+      wss.clients.forEach((ws) => {
+        if (ws.readyState === 1) { // WebSocket.OPEN
+          try {
+            ws.ping();
+          } catch (error) {
+            console.error('WebSocket ping error:', error);
+          }
+        }
+      });
+    }, 30000); // 30 seconds
+
+    // Cleanup interval on server shutdown
+    process.on('SIGINT', () => {
+      clearInterval(interval);
+    });
+
   } catch (error) {
     console.error('❌ Failed to start server:', error);
     process.exit(1);
@@ -114,6 +157,12 @@ process.on('SIGINT', async () => {
   try {
     await jobScheduler.shutdown();
     await database.close();
+    
+    // Close WebSocket connections
+    wss.clients.forEach((ws) => {
+      ws.close();
+    });
+    
     server.close(() => {
       console.log('✅ Server closed');
       process.exit(0);

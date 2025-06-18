@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Play, Settings, Users, Server, Clock } from 'lucide-react';
 import { api } from '../services/api';
 import { Button } from './Button';
+import { JobStatusIndicator } from './JobStatusIndicator';
 import { formatDistanceToNow } from 'date-fns';
 
 interface ActiveJob {
@@ -15,14 +16,20 @@ interface ActiveJob {
   switch_count: number;
   device_count: number;
   last_execution: string;
+  is_running?: boolean;
 }
 
 export function ActiveJobs() {
   const [jobs, setJobs] = useState<ActiveJob[]>([]);
   const [loading, setLoading] = useState(true);
+  const [executingJobs, setExecutingJobs] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchActiveJobs();
+    
+    // Refresh jobs every 30 seconds
+    const interval = setInterval(fetchActiveJobs, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   const fetchActiveJobs = async () => {
@@ -38,10 +45,29 @@ export function ActiveJobs() {
 
   const executeJob = async (jobId: string) => {
     try {
-      await api.post(`/jobs/${jobId}/execute`);
-      // Show success message
-    } catch (error) {
+      setExecutingJobs(prev => new Set(prev).add(jobId));
+      
+      const response = await api.post(`/jobs/${jobId}/execute`);
+      
+      if (response.data.status === 'started') {
+        // Job started successfully, status will be updated via WebSocket
+        console.log(`Job ${jobId} execution started`);
+      }
+    } catch (error: any) {
       console.error('Failed to execute job:', error);
+      
+      // Show error message
+      const errorMessage = error.response?.data?.error || 'Failed to execute job';
+      alert(errorMessage);
+    } finally {
+      // Remove from executing set after a delay to prevent rapid clicking
+      setTimeout(() => {
+        setExecutingJobs(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(jobId);
+          return newSet;
+        });
+      }, 2000);
     }
   };
 
@@ -103,15 +129,19 @@ export function ActiveJobs() {
             </div>
             
             <div className="flex items-center space-x-2">
+              <JobStatusIndicator jobId={job.id} />
+              
               {job.last_execution && (
                 <span className="text-xs text-gray-500">
                   {formatDistanceToNow(new Date(job.last_execution))} ago
                 </span>
               )}
+              
               <Button
                 size="sm"
                 onClick={() => executeJob(job.id)}
-                className="bg-green-600 hover:bg-green-700"
+                disabled={executingJobs.has(job.id)}
+                className="bg-green-600 hover:bg-green-700 disabled:opacity-50"
               >
                 <Play className="h-3 w-3" />
               </Button>

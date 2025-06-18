@@ -17,7 +17,9 @@ import {
   Settings,
   List,
   History,
-  UserCheck
+  UserCheck,
+  Loader2,
+  StopCircle
 } from 'lucide-react';
 import { api } from '../services/api';
 import { Button } from '../components/Button';
@@ -26,6 +28,8 @@ import { JobHistory } from '../components/JobHistory';
 import { WhitelistManager } from '../components/WhitelistManager';
 import { EditJobModal } from '../components/EditJobModal';
 import { SwitchConsole } from '../components/SwitchConsole';
+import { JobStatusIndicator } from '../components/JobStatusIndicator';
+import { useWebSocket } from '../contexts/WebSocketContext';
 import { formatDistanceToNow } from 'date-fns';
 
 interface JobDetails {
@@ -52,11 +56,14 @@ interface JobDetails {
     status: string;
     devices_found: number;
   };
+  is_running?: boolean;
+  job_status?: any;
 }
 
 export function JobDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { jobStatuses } = useWebSocket();
   const [job, setJob] = useState<JobDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('devices');
@@ -68,6 +75,10 @@ export function JobDetails() {
   useEffect(() => {
     if (id) {
       fetchJobDetails();
+      
+      // Refresh job details every 30 seconds
+      const interval = setInterval(fetchJobDetails, 30000);
+      return () => clearInterval(interval);
     }
   }, [id]);
 
@@ -87,15 +98,22 @@ export function JobDetails() {
     
     setExecuting(true);
     try {
-      await api.post(`/jobs/${id}/execute`);
-      // Show success notification
-      setTimeout(() => {
-        fetchJobDetails(); // Refresh data after execution
-      }, 2000);
-    } catch (error) {
+      const response = await api.post(`/jobs/${id}/execute`);
+      
+      if (response.data.status === 'started') {
+        console.log('Job execution started successfully');
+        // Status updates will come via WebSocket
+      }
+    } catch (error: any) {
       console.error('Failed to execute job:', error);
+      
+      const errorMessage = error.response?.data?.error || 'Failed to execute job';
+      alert(errorMessage);
     } finally {
-      setExecuting(false);
+      setTimeout(() => {
+        setExecuting(false);
+        fetchJobDetails(); // Refresh data
+      }, 2000);
     }
   };
 
@@ -107,8 +125,11 @@ export function JobDetails() {
     try {
       await api.delete(`/jobs/${id}`);
       navigate('/jobs');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to delete job:', error);
+      
+      const errorMessage = error.response?.data?.error || 'Failed to delete job';
+      alert(errorMessage);
     }
   };
 
@@ -122,6 +143,10 @@ export function JobDetails() {
     { id: 'whitelist', label: 'Whitelist', icon: UserCheck },
     { id: 'history', label: 'Execution History', icon: History },
   ];
+
+  // Get current job status from WebSocket
+  const currentJobStatus = id ? jobStatuses.get(id) : null;
+  const isJobRunning = currentJobStatus?.status === 'running' || executing;
 
   if (loading) {
     return (
@@ -158,9 +183,12 @@ export function JobDetails() {
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">
-              {job.name}
-            </h1>
+            <div className="flex items-center space-x-3">
+              <h1 className="text-3xl font-bold bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">
+                {job.name}
+              </h1>
+              {id && <JobStatusIndicator jobId={id} />}
+            </div>
             <p className="text-gray-400 mt-1">
               VLAN {job.vlan_id} • {job.switches.length} switches • 
               {job.last_execution && (
@@ -183,17 +211,27 @@ export function JobDetails() {
           
           <Button
             onClick={executeJob}
-            disabled={executing}
+            disabled={executing || isJobRunning}
             className="bg-green-600 hover:bg-green-700 disabled:opacity-50"
           >
-            <Play className="h-4 w-4 mr-2" />
-            {executing ? 'Running...' : 'Run Now'}
+            {executing || isJobRunning ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Running...
+              </>
+            ) : (
+              <>
+                <Play className="h-4 w-4 mr-2" />
+                Run Now
+              </>
+            )}
           </Button>
           
           <Button
             variant="outline"
             onClick={() => setShowEditModal(true)}
-            className="border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10"
+            disabled={isJobRunning}
+            className="border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10 disabled:opacity-50"
           >
             <Edit className="h-4 w-4 mr-2" />
             Edit
@@ -202,12 +240,82 @@ export function JobDetails() {
           <Button
             variant="outline"
             onClick={deleteJob}
-            className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+            disabled={isJobRunning}
+            className="border-red-500/30 text-red-400 hover:bg-red-500/10 disabled:opacity-50"
           >
             <Trash2 className="h-4 w-4" />
           </Button>
         </div>
       </div>
+
+      {/* Real-time Job Status */}
+      {currentJobStatus && currentJobStatus.status === 'running' && (
+        <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <Loader2 className="h-5 w-5 animate-spin text-blue-400" />
+              <div>
+                <h3 className="text-lg font-semibold text-blue-400">Job Running</h3>
+                <p className="text-sm text-blue-300">{currentJobStatus.message}</p>
+                {currentJobStatus.currentSwitch && (
+                  <p className="text-xs text-blue-200">Current switch: {currentJobStatus.currentSwitch}</p>
+                )}
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-2xl font-bold text-blue-400">{currentJobStatus.progress}%</div>
+              <div className="w-32 h-2 bg-gray-700 rounded-full mt-1">
+                <div 
+                  className="h-full bg-blue-400 rounded-full transition-all duration-300"
+                  style={{ width: `${currentJobStatus.progress}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Job Completion Status */}
+      {currentJobStatus && (currentJobStatus.status === 'completed' || currentJobStatus.status === 'failed') && (
+        <div className={`border rounded-xl p-4 ${
+          currentJobStatus.status === 'completed' 
+            ? 'bg-green-500/10 border-green-500/30' 
+            : 'bg-red-500/10 border-red-500/30'
+        }`}>
+          <div className="flex items-center space-x-3">
+            {currentJobStatus.status === 'completed' ? (
+              <CheckCircle className="h-5 w-5 text-green-400" />
+            ) : (
+              <XCircle className="h-5 w-5 text-red-400" />
+            )}
+            <div>
+              <h3 className={`text-lg font-semibold ${
+                currentJobStatus.status === 'completed' ? 'text-green-400' : 'text-red-400'
+              }`}>
+                Job {currentJobStatus.status === 'completed' ? 'Completed' : 'Failed'}
+              </h3>
+              <p className={`text-sm ${
+                currentJobStatus.status === 'completed' ? 'text-green-300' : 'text-red-300'
+              }`}>
+                {currentJobStatus.message}
+              </p>
+              {currentJobStatus.status === 'completed' && (
+                <div className="flex items-center space-x-4 mt-2 text-xs text-green-200">
+                  {currentJobStatus.devicesFound !== undefined && (
+                    <span>Devices found: {currentJobStatus.devicesFound}</span>
+                  )}
+                  {currentJobStatus.newDevices !== undefined && currentJobStatus.newDevices > 0 && (
+                    <span>New: {currentJobStatus.newDevices}</span>
+                  )}
+                  {currentJobStatus.unauthorizedDevices !== undefined && currentJobStatus.unauthorizedDevices > 0 && (
+                    <span>Unauthorized: {currentJobStatus.unauthorizedDevices}</span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Job Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

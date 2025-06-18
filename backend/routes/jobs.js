@@ -39,15 +39,39 @@ export function jobRoutes(app, database, jobScheduler) {
         [id]
       );
 
+      // Get job running status
+      const isRunning = jobScheduler.isJobRunning(id);
+      const jobStatus = jobScheduler.getJobStatus(id);
+
       res.json({
         ...job,
         switches,
         device_count: deviceCount.count,
-        last_execution: lastExecution
+        last_execution: lastExecution,
+        is_running: isRunning,
+        job_status: jobStatus
       });
     } catch (error) {
       console.error('Failed to fetch job:', error);
       res.status(500).json({ error: 'Failed to fetch job' });
+    }
+  });
+
+  // Get job status (real-time)
+  app.get('/api/jobs/:id/status', async (req, res) => {
+    try {
+      const { id } = req.params;
+      
+      const isRunning = jobScheduler.isJobRunning(id);
+      const jobStatus = jobScheduler.getJobStatus(id);
+
+      res.json({
+        isRunning,
+        status: jobStatus
+      });
+    } catch (error) {
+      console.error('Failed to fetch job status:', error);
+      res.status(500).json({ error: 'Failed to fetch job status' });
     }
   });
 
@@ -158,6 +182,11 @@ export function jobRoutes(app, database, jobScheduler) {
         return res.status(404).json({ error: 'Job not found' });
       }
 
+      // Check if job is running
+      if (jobScheduler.isJobRunning(id)) {
+        return res.status(400).json({ error: 'Cannot update job while it is running' });
+      }
+
       // Start transaction
       await database.run('BEGIN TRANSACTION');
 
@@ -230,6 +259,11 @@ export function jobRoutes(app, database, jobScheduler) {
         return res.status(404).json({ error: 'Job not found' });
       }
 
+      // Check if job is running
+      if (jobScheduler.isJobRunning(id)) {
+        return res.status(400).json({ error: 'Cannot delete job while it is running' });
+      }
+
       // Unschedule job
       await jobScheduler.unscheduleJob(id);
 
@@ -243,7 +277,7 @@ export function jobRoutes(app, database, jobScheduler) {
     }
   });
 
-  // Execute job manually
+  // Execute job manually with real-time status updates
   app.post('/api/jobs/:id/execute', async (req, res) => {
     try {
       const { id } = req.params;
@@ -253,15 +287,42 @@ export function jobRoutes(app, database, jobScheduler) {
         return res.status(404).json({ error: 'Job not found' });
       }
 
+      // Check if job is already running
+      if (jobScheduler.isJobRunning(id)) {
+        return res.status(400).json({ error: 'Job is already running' });
+      }
+
       // Execute job in background
       jobScheduler.executeJob(id).catch(error => {
         console.error(`Background job execution failed for ${id}:`, error);
       });
 
-      res.json({ message: 'Job execution started' });
+      res.json({ 
+        message: 'Job execution started',
+        jobId: id,
+        status: 'started'
+      });
     } catch (error) {
       console.error('Failed to execute job:', error);
       res.status(500).json({ error: 'Failed to execute job' });
+    }
+  });
+
+  // Stop job execution
+  app.post('/api/jobs/:id/stop', async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!jobScheduler.isJobRunning(id)) {
+        return res.status(400).json({ error: 'Job is not running' });
+      }
+
+      // Note: This would require implementing job cancellation in the scheduler
+      // For now, we'll return a message indicating the feature is not implemented
+      res.status(501).json({ error: 'Job cancellation not yet implemented' });
+    } catch (error) {
+      console.error('Failed to stop job:', error);
+      res.status(500).json({ error: 'Failed to stop job' });
     }
   });
 

@@ -8,7 +8,8 @@ export class JobScheduler {
     this.notificationService = notificationService;
     this.sshService = new SSHService();
     this.scheduledJobs = new Map();
-    this.runningJobs = new Set();
+    this.runningJobs = new Map(); // Changed to Map to store job status
+    this.jobStatusEmitter = notificationService; // Use notification service for real-time updates
   }
 
   async initialize() {
@@ -77,7 +78,19 @@ export class JobScheduler {
     }
 
     const startTime = Date.now();
-    this.runningJobs.add(jobId);
+    
+    // Set job status to running and emit real-time update
+    this.runningJobs.set(jobId, {
+      status: 'running',
+      startTime,
+      progress: 0
+    });
+
+    this.emitJobStatusUpdate(jobId, {
+      status: 'running',
+      message: 'Job execution started',
+      progress: 0
+    });
 
     try {
       // Get job details
@@ -102,11 +115,28 @@ export class JobScheduler {
       let newDevices = 0;
       let unauthorizedDevices = 0;
       const errors = [];
+      const totalSwitches = switches.length;
+      let completedSwitches = 0;
 
       // Scan each switch
       for (const switchConfig of switches) {
         try {
           console.log(`🔍 Scanning switch: ${switchConfig.name} (${switchConfig.host})`);
+          
+          // Update progress
+          const progress = Math.floor((completedSwitches / totalSwitches) * 100);
+          this.runningJobs.set(jobId, {
+            ...this.runningJobs.get(jobId),
+            progress,
+            currentSwitch: switchConfig.name
+          });
+
+          this.emitJobStatusUpdate(jobId, {
+            status: 'running',
+            message: `Scanning switch: ${switchConfig.name}`,
+            progress,
+            currentSwitch: switchConfig.name
+          });
           
           const macAddresses = await this.sshService.scanMacAddresses(
             switchConfig,
@@ -123,9 +153,12 @@ export class JobScheduler {
           // Update device statuses
           await this.updateDeviceStatuses(jobId, switchConfig.id, macAddresses);
 
+          completedSwitches++;
+
         } catch (error) {
           console.error(`❌ Failed to scan switch ${switchConfig.name}:`, error);
           errors.push(`Switch ${switchConfig.name}: ${error.message}`);
+          completedSwitches++;
         }
       }
 
@@ -151,6 +184,16 @@ export class JobScheduler {
       // Send notifications
       await this.sendJobNotifications(job, newDevices, unauthorizedDevices);
 
+      // Emit completion status
+      this.emitJobStatusUpdate(jobId, {
+        status: 'completed',
+        message: `Job completed successfully. Found ${totalDevicesFound} devices.`,
+        progress: 100,
+        devicesFound: totalDevicesFound,
+        newDevices,
+        unauthorizedDevices
+      });
+
       console.log(`✅ Job ${job.name} completed successfully`);
 
     } catch (error) {
@@ -175,9 +218,32 @@ export class JobScheduler {
         severity: 'error'
       });
 
+      // Emit error status
+      this.emitJobStatusUpdate(jobId, {
+        status: 'failed',
+        message: `Job failed: ${error.message}`,
+        progress: 0,
+        error: error.message
+      });
+
     } finally {
       this.runningJobs.delete(jobId);
     }
+  }
+
+  emitJobStatusUpdate(jobId, statusData) {
+    // Emit real-time job status update
+    if (this.jobStatusEmitter && this.jobStatusEmitter.broadcastJobStatus) {
+      this.jobStatusEmitter.broadcastJobStatus(jobId, statusData);
+    }
+  }
+
+  getJobStatus(jobId) {
+    return this.runningJobs.get(jobId) || null;
+  }
+
+  isJobRunning(jobId) {
+    return this.runningJobs.has(jobId);
   }
 
   async processDevice(job, switchConfig, macAddress) {
