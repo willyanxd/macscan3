@@ -4,6 +4,47 @@ export class SSHService {
   constructor() {
     this.connections = new Map();
     this.debugMode = process.env.SSH_DEBUG === 'true';
+    
+    // Enhanced SSH algorithms for maximum compatibility
+    this.sshAlgorithms = {
+      kex: [
+        "diffie-hellman-group1-sha1",
+        "ecdh-sha2-nistp256",
+        "ecdh-sha2-nistp384",
+        "ecdh-sha2-nistp521",
+        "diffie-hellman-group-exchange-sha256",
+        "diffie-hellman-group14-sha1",
+        "diffie-hellman-group14-sha256",
+        "diffie-hellman-group16-sha512",
+        "diffie-hellman-group18-sha512"
+      ],
+      cipher: [
+        "3des-cbc",
+        "aes128-ctr",
+        "aes192-ctr",
+        "aes256-ctr",
+        "aes128-gcm",
+        "aes128-gcm@openssh.com",
+        "aes256-gcm",
+        "aes256-gcm@openssh.com",
+        "aes128-cbc",
+        "aes192-cbc",
+        "aes256-cbc"
+      ],
+      serverHostKey: [
+        "ssh-rsa",
+        "ecdsa-sha2-nistp256",
+        "ecdsa-sha2-nistp384",
+        "ecdsa-sha2-nistp521",
+        "ssh-dss"
+      ],
+      hmac: [
+        "hmac-sha2-256",
+        "hmac-sha2-512",
+        "hmac-sha1",
+        "hmac-md5"
+      ]
+    };
   }
 
   /**
@@ -33,10 +74,10 @@ export class SSHService {
 
       const timeout = setTimeout(() => {
         conn.end();
-        connectionDetails.message = 'Connection timeout (10 seconds)';
+        connectionDetails.message = 'Connection timeout (15 seconds)';
         connectionDetails.details.error = 'TIMEOUT';
         resolve(connectionDetails);
-      }, 10000);
+      }, 15000);
 
       conn.on('ready', () => {
         clearTimeout(timeout);
@@ -92,6 +133,8 @@ export class SSHService {
           default:
             if (err.message.includes('Authentication')) {
               connectionDetails.message = 'Authentication failed - Check username/password';
+            } else if (err.message.includes('Handshake failed')) {
+              connectionDetails.message = 'SSH handshake failed - Switch may use older SSH protocols';
             } else {
               connectionDetails.message = `Connection failed: ${err.message}`;
             }
@@ -105,34 +148,8 @@ export class SSHService {
           port,
           username,
           password,
-          readyTimeout: 10000,
-          algorithms: {
-            kex: [
-              'diffie-hellman-group14-sha256',
-              'diffie-hellman-group14-sha1',
-              'diffie-hellman-group1-sha1',
-              'ecdh-sha2-nistp256',
-              'ecdh-sha2-nistp384',
-              'ecdh-sha2-nistp521'
-            ],
-            cipher: [
-              'aes128-ctr',
-              'aes192-ctr', 
-              'aes256-ctr',
-              'aes128-gcm',
-              'aes256-gcm',
-              'aes128-cbc',
-              'aes192-cbc',
-              'aes256-cbc',
-              '3des-cbc'
-            ],
-            hmac: [
-              'hmac-sha2-256',
-              'hmac-sha2-512',
-              'hmac-sha1',
-              'hmac-md5'
-            ]
-          },
+          readyTimeout: 15000,
+          algorithms: this.sshAlgorithms,
           debug: this.debugMode ? console.log : undefined
         });
       } catch (error) {
@@ -216,29 +233,7 @@ export class SSHService {
         username,
         password,
         readyTimeout: 30000,
-        algorithms: {
-          kex: [
-            'diffie-hellman-group14-sha256',
-            'diffie-hellman-group14-sha1',
-            'diffie-hellman-group1-sha1',
-            'ecdh-sha2-nistp256'
-          ],
-          cipher: [
-            'aes128-ctr',
-            'aes192-ctr', 
-            'aes256-ctr',
-            'aes128-gcm',
-            'aes256-gcm',
-            'aes128-cbc',
-            'aes192-cbc',
-            'aes256-cbc'
-          ],
-          hmac: [
-            'hmac-sha2-256',
-            'hmac-sha2-512',
-            'hmac-sha1'
-          ]
-        }
+        algorithms: this.sshAlgorithms
       });
     });
   }
@@ -473,26 +468,8 @@ export class SSHService {
         port,
         username,
         password,
-        readyTimeout: 10000,
-        algorithms: {
-          kex: [
-            'diffie-hellman-group14-sha256',
-            'diffie-hellman-group14-sha1',
-            'diffie-hellman-group1-sha1'
-          ],
-          cipher: [
-            'aes128-ctr',
-            'aes192-ctr', 
-            'aes256-ctr',
-            'aes128-gcm',
-            'aes256-gcm'
-          ],
-          hmac: [
-            'hmac-sha2-256',
-            'hmac-sha2-512',
-            'hmac-sha1'
-          ]
-        }
+        readyTimeout: 15000,
+        algorithms: this.sshAlgorithms
       });
     });
   }

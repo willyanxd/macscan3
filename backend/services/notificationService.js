@@ -51,6 +51,24 @@ export class NotificationService {
     }
   }
 
+  broadcastJobProgress(jobId, progress) {
+    if (this.wss) {
+      const message = JSON.stringify({
+        type: 'job_progress',
+        data: {
+          jobId,
+          progress
+        }
+      });
+
+      this.wss.clients.forEach(client => {
+        if (client.readyState === 1) { // WebSocket.OPEN
+          client.send(message);
+        }
+      });
+    }
+  }
+
   async getNotifications(limit = 50, offset = 0) {
     // This would normally fetch from database
     return [];

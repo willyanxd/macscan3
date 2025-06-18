@@ -243,7 +243,7 @@ export function jobRoutes(app, database, jobScheduler) {
     }
   });
 
-  // Execute job manually
+  // Execute job manually with real-time status updates
   app.post('/api/jobs/:id/execute', async (req, res) => {
     try {
       const { id } = req.params;
@@ -253,15 +253,55 @@ export function jobRoutes(app, database, jobScheduler) {
         return res.status(404).json({ error: 'Job not found' });
       }
 
+      // Check if job is already running
+      if (jobScheduler.isJobRunning(id)) {
+        return res.status(409).json({ 
+          error: 'Job is already running',
+          status: 'running'
+        });
+      }
+
       // Execute job in background
       jobScheduler.executeJob(id).catch(error => {
         console.error(`Background job execution failed for ${id}:`, error);
       });
 
-      res.json({ message: 'Job execution started' });
+      res.json({ 
+        message: 'Job execution started',
+        status: 'started',
+        jobId: id
+      });
     } catch (error) {
       console.error('Failed to execute job:', error);
       res.status(500).json({ error: 'Failed to execute job' });
+    }
+  });
+
+  // Get job execution status
+  app.get('/api/jobs/:id/status', async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const job = await database.get('SELECT * FROM jobs WHERE id = ?', [id]);
+      if (!job) {
+        return res.status(404).json({ error: 'Job not found' });
+      }
+
+      const isRunning = jobScheduler.isJobRunning(id);
+      const lastExecution = await database.get(
+        'SELECT * FROM job_history WHERE job_id = ? ORDER BY execution_time DESC LIMIT 1',
+        [id]
+      );
+
+      res.json({
+        jobId: id,
+        isRunning,
+        lastExecution,
+        status: isRunning ? 'running' : 'idle'
+      });
+    } catch (error) {
+      console.error('Failed to get job status:', error);
+      res.status(500).json({ error: 'Failed to get job status' });
     }
   });
 

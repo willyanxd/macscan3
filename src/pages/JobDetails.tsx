@@ -17,7 +17,9 @@ import {
   Settings,
   List,
   History,
-  UserCheck
+  UserCheck,
+  Loader,
+  Activity
 } from 'lucide-react';
 import { api } from '../services/api';
 import { Button } from '../components/Button';
@@ -26,6 +28,7 @@ import { JobHistory } from '../components/JobHistory';
 import { WhitelistManager } from '../components/WhitelistManager';
 import { EditJobModal } from '../components/EditJobModal';
 import { SwitchConsole } from '../components/SwitchConsole';
+import { useWebSocket } from '../contexts/WebSocketContext';
 import { formatDistanceToNow } from 'date-fns';
 
 interface JobDetails {
@@ -54,6 +57,19 @@ interface JobDetails {
   };
 }
 
+interface JobProgress {
+  status: 'starting' | 'running' | 'processing' | 'completed' | 'failed';
+  progress: number;
+  currentStep: string;
+  switchesCompleted: number;
+  totalSwitches: number;
+  devicesFound: number;
+  newDevices?: number;
+  unauthorizedDevices?: number;
+  errors: string[];
+  error?: string;
+}
+
 export function JobDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -64,12 +80,42 @@ export function JobDetails() {
   const [showConsole, setShowConsole] = useState(false);
   const [selectedSwitch, setSelectedSwitch] = useState<any>(null);
   const [executing, setExecuting] = useState(false);
+  const [jobProgress, setJobProgress] = useState<JobProgress | null>(null);
+  const { socket } = useWebSocket();
 
   useEffect(() => {
     if (id) {
       fetchJobDetails();
+      checkJobStatus();
     }
   }, [id]);
+
+  useEffect(() => {
+    if (socket) {
+      const handleMessage = (event: MessageEvent) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'job_progress' && data.data.jobId === id) {
+            setJobProgress(data.data.progress);
+            
+            // Update executing state based on progress
+            if (data.data.progress.status === 'completed' || data.data.progress.status === 'failed') {
+              setExecuting(false);
+              // Refresh job details after completion
+              setTimeout(() => {
+                fetchJobDetails();
+              }, 1000);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to parse WebSocket message:', error);
+        }
+      };
+
+      socket.addEventListener('message', handleMessage);
+      return () => socket.removeEventListener('message', handleMessage);
+    }
+  }, [socket, id]);
 
   const fetchJobDetails = async () => {
     try {
@@ -82,20 +128,47 @@ export function JobDetails() {
     }
   };
 
+  const checkJobStatus = async () => {
+    try {
+      const response = await api.get(`/jobs/${id}/status`);
+      if (response.data.isRunning) {
+        setExecuting(true);
+      }
+    } catch (error) {
+      console.error('Failed to check job status:', error);
+    }
+  };
+
   const executeJob = async () => {
     if (!id) return;
     
     setExecuting(true);
+    setJobProgress({
+      status: 'starting',
+      progress: 0,
+      currentStep: 'Initializing job execution...',
+      switchesCompleted: 0,
+      totalSwitches: 0,
+      devicesFound: 0,
+      errors: []
+    });
+
     try {
-      await api.post(`/jobs/${id}/execute`);
-      // Show success notification
-      setTimeout(() => {
-        fetchJobDetails(); // Refresh data after execution
-      }, 2000);
+      const response = await api.post(`/jobs/${id}/execute`);
+      
+      if (response.data.status === 'running') {
+        // Job is already running
+        setExecuting(false);
+        alert('Job is already running');
+        return;
+      }
+
+      // Job started successfully - progress will be updated via WebSocket
     } catch (error) {
       console.error('Failed to execute job:', error);
-    } finally {
       setExecuting(false);
+      setJobProgress(null);
+      alert('Failed to start job execution');
     }
   };
 
@@ -186,8 +259,17 @@ export function JobDetails() {
             disabled={executing}
             className="bg-green-600 hover:bg-green-700 disabled:opacity-50"
           >
-            <Play className="h-4 w-4 mr-2" />
-            {executing ? 'Running...' : 'Run Now'}
+            {executing ? (
+              <>
+                <Loader className="h-4 w-4 mr-2 animate-spin" />
+                Running...
+              </>
+            ) : (
+              <>
+                <Play className="h-4 w-4 mr-2" />
+                Run Now
+              </>
+            )}
           </Button>
           
           <Button
@@ -208,6 +290,77 @@ export function JobDetails() {
           </Button>
         </div>
       </div>
+
+      {/* Job Progress */}
+      {jobProgress && (
+        <div className="bg-gray-800 rounded-xl border border-cyan-500/30 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-white flex items-center">
+              <Activity className="h-5 w-5 mr-2 text-cyan-400" />
+              Job Execution Progress
+            </h3>
+            <div className={`px-3 py-1 rounded-full text-sm font-medium ${
+              jobProgress.status === 'completed' ? 'bg-green-500/20 text-green-400' :
+              jobProgress.status === 'failed' ? 'bg-red-500/20 text-red-400' :
+              'bg-blue-500/20 text-blue-400'
+            }`}>
+              {jobProgress.status}
+            </div>
+          </div>
+          
+          <div className="space-y-4">
+            {/* Progress Bar */}
+            <div>
+              <div className="flex justify-between text-sm text-gray-400 mb-2">
+                <span>{jobProgress.currentStep}</span>
+                <span>{jobProgress.progress}%</span>
+              </div>
+              <div className="w-full bg-gray-700 rounded-full h-2">
+                <div 
+                  className="bg-gradient-to-r from-cyan-500 to-purple-500 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${jobProgress.progress}%` }}
+                ></div>
+              </div>
+            </div>
+            
+            {/* Progress Stats */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="text-center">
+                <p className="text-2xl font-bold text-white">{jobProgress.switchesCompleted}</p>
+                <p className="text-sm text-gray-400">of {jobProgress.totalSwitches} switches</p>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-cyan-400">{jobProgress.devicesFound}</p>
+                <p className="text-sm text-gray-400">devices found</p>
+              </div>
+              {jobProgress.newDevices !== undefined && (
+                <div className="text-center">
+                  <p className="text-2xl font-bold text-green-400">{jobProgress.newDevices}</p>
+                  <p className="text-sm text-gray-400">new devices</p>
+                </div>
+              )}
+              {jobProgress.unauthorizedDevices !== undefined && (
+                <div className="text-center">
+                  <p className="text-2xl font-bold text-red-400">{jobProgress.unauthorizedDevices}</p>
+                  <p className="text-sm text-gray-400">unauthorized</p>
+                </div>
+              )}
+            </div>
+            
+            {/* Errors */}
+            {jobProgress.errors.length > 0 && (
+              <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+                <h4 className="text-sm font-medium text-red-400 mb-2">Errors:</h4>
+                <ul className="text-sm text-gray-300 space-y-1">
+                  {jobProgress.errors.map((error, index) => (
+                    <li key={index}>• {error}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Job Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

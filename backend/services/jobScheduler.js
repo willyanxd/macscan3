@@ -9,6 +9,7 @@ export class JobScheduler {
     this.sshService = new SSHService();
     this.scheduledJobs = new Map();
     this.runningJobs = new Set();
+    this.jobProgress = new Map(); // Track job progress
   }
 
   async initialize() {
@@ -70,6 +71,14 @@ export class JobScheduler {
     }
   }
 
+  isJobRunning(jobId) {
+    return this.runningJobs.has(jobId);
+  }
+
+  getJobProgress(jobId) {
+    return this.jobProgress.get(jobId) || null;
+  }
+
   async executeJob(jobId) {
     if (this.runningJobs.has(jobId)) {
       console.log(`⚠️ Job ${jobId} is already running, skipping execution`);
@@ -78,6 +87,18 @@ export class JobScheduler {
 
     const startTime = Date.now();
     this.runningJobs.add(jobId);
+    
+    // Initialize progress tracking
+    this.jobProgress.set(jobId, {
+      status: 'starting',
+      progress: 0,
+      currentStep: 'Initializing job execution',
+      startTime,
+      switchesCompleted: 0,
+      totalSwitches: 0,
+      devicesFound: 0,
+      errors: []
+    });
 
     try {
       // Get job details
@@ -87,6 +108,12 @@ export class JobScheduler {
       }
 
       console.log(`🚀 Starting job execution: ${job.name}`);
+      
+      // Update progress
+      this.updateJobProgress(jobId, {
+        status: 'running',
+        currentStep: 'Loading job configuration'
+      });
 
       // Get job switches
       const switches = await this.database.all(
@@ -98,15 +125,29 @@ export class JobScheduler {
         throw new Error('No switches configured for this job');
       }
 
+      // Update progress with switch count
+      this.updateJobProgress(jobId, {
+        totalSwitches: switches.length,
+        currentStep: `Scanning ${switches.length} switches`
+      });
+
       let totalDevicesFound = 0;
       let newDevices = 0;
       let unauthorizedDevices = 0;
       const errors = [];
 
       // Scan each switch
-      for (const switchConfig of switches) {
+      for (let i = 0; i < switches.length; i++) {
+        const switchConfig = switches[i];
+        
         try {
           console.log(`🔍 Scanning switch: ${switchConfig.name} (${switchConfig.host})`);
+          
+          // Update progress
+          this.updateJobProgress(jobId, {
+            currentStep: `Scanning switch: ${switchConfig.name}`,
+            progress: Math.round((i / switches.length) * 100)
+          });
           
           const macAddresses = await this.sshService.scanMacAddresses(
             switchConfig,
@@ -123,11 +164,32 @@ export class JobScheduler {
           // Update device statuses
           await this.updateDeviceStatuses(jobId, switchConfig.id, macAddresses);
 
+          // Update progress
+          this.updateJobProgress(jobId, {
+            switchesCompleted: i + 1,
+            devicesFound: totalDevicesFound,
+            currentStep: `Completed switch: ${switchConfig.name} (${macAddresses.length} devices)`
+          });
+
         } catch (error) {
           console.error(`❌ Failed to scan switch ${switchConfig.name}:`, error);
-          errors.push(`Switch ${switchConfig.name}: ${error.message}`);
+          const errorMsg = `Switch ${switchConfig.name}: ${error.message}`;
+          errors.push(errorMsg);
+          
+          // Update progress with error
+          this.updateJobProgress(jobId, {
+            switchesCompleted: i + 1,
+            errors: [...this.jobProgress.get(jobId).errors, errorMsg]
+          });
         }
       }
+
+      // Update progress - processing results
+      this.updateJobProgress(jobId, {
+        status: 'processing',
+        currentStep: 'Processing scan results',
+        progress: 90
+      });
 
       // Count new and unauthorized devices
       const counts = await this.getDeviceCounts(jobId, startTime);
@@ -151,10 +213,28 @@ export class JobScheduler {
       // Send notifications
       await this.sendJobNotifications(job, newDevices, unauthorizedDevices);
 
+      // Update final progress
+      this.updateJobProgress(jobId, {
+        status: 'completed',
+        currentStep: 'Job completed successfully',
+        progress: 100,
+        devicesFound: totalDevicesFound,
+        newDevices,
+        unauthorizedDevices
+      });
+
       console.log(`✅ Job ${job.name} completed successfully`);
 
     } catch (error) {
       console.error(`❌ Job ${jobId} failed:`, error);
+      
+      // Update progress with error
+      this.updateJobProgress(jobId, {
+        status: 'failed',
+        currentStep: `Job failed: ${error.message}`,
+        progress: 100,
+        error: error.message
+      });
       
       await this.recordJobExecution(
         jobId,
@@ -177,6 +257,22 @@ export class JobScheduler {
 
     } finally {
       this.runningJobs.delete(jobId);
+      
+      // Keep progress for 5 minutes after completion
+      setTimeout(() => {
+        this.jobProgress.delete(jobId);
+      }, 5 * 60 * 1000);
+    }
+  }
+
+  updateJobProgress(jobId, updates) {
+    const currentProgress = this.jobProgress.get(jobId) || {};
+    const updatedProgress = { ...currentProgress, ...updates };
+    this.jobProgress.set(jobId, updatedProgress);
+    
+    // Broadcast progress via WebSocket if available
+    if (this.notificationService && this.notificationService.wss) {
+      this.notificationService.broadcastJobProgress(jobId, updatedProgress);
     }
   }
 
