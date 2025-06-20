@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Bell, CheckCircle, AlertTriangle, Info, XCircle, Trash2, MarkAsUnread, ExternalLink, Trash } from 'lucide-react';
+import { Bell, CheckCircle, AlertTriangle, Info, XCircle, Trash2, AreaChart as MarkAsUnread, ExternalLink, Trash } from 'lucide-react';
 import { api } from '../services/api';
 import { Button } from '../components/Button';
 import { formatDistanceToNow } from 'date-fns';
