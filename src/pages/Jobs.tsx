@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Play, Pause, Edit, Trash2, Server, Users, Clock } from 'lucide-react';
+import { Plus, Play, Pause, Edit, Trash2, Server, Users, Clock, Loader2, CheckCircle, XCircle } from 'lucide-react';
 import { api } from '../services/api';
 import { Button } from '../components/Button';
 import { formatDistanceToNow } from 'date-fns';
+import { useWebSocket } from '../contexts/WebSocketContext';
 
 interface Job {
   id: string;
@@ -20,10 +21,36 @@ interface Job {
 export function Jobs() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+  const [executingJobs, setExecutingJobs] = useState<Set<string>>(new Set());
+  const { jobStatuses } = useWebSocket();
 
   useEffect(() => {
     fetchJobs();
   }, []);
+
+  // Update job execution states based on WebSocket status
+  useEffect(() => {
+    const newExecutingJobs = new Set<string>();
+    
+    jobStatuses.forEach((status, jobId) => {
+      if (status.status === 'running' || status.status === 'scanning') {
+        newExecutingJobs.add(jobId);
+      }
+    });
+    
+    setExecutingJobs(newExecutingJobs);
+    
+    // Refresh jobs list when jobs complete
+    const completedJobs = Array.from(jobStatuses.values()).filter(
+      status => status.status === 'completed' || status.status === 'failed'
+    );
+    
+    if (completedJobs.length > 0) {
+      setTimeout(() => {
+        fetchJobs();
+      }, 1000);
+    }
+  }, [jobStatuses]);
 
   const fetchJobs = async () => {
     try {
@@ -38,15 +65,20 @@ export function Jobs() {
 
   const executeJob = async (jobId: string) => {
     try {
+      setExecutingJobs(prev => new Set(prev).add(jobId));
       await api.post(`/jobs/${jobId}/execute`);
-      // Show success message
     } catch (error) {
       console.error('Failed to execute job:', error);
+      setExecutingJobs(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(jobId);
+        return newSet;
+      });
     }
   };
 
   const deleteJob = async (jobId: string) => {
-    if (!confirm('Are you sure you want to delete this job?')) {
+    if (!confirm('Are you sure you want to delete this job? This will also delete all associated devices, history, and notifications.')) {
       return;
     }
 
@@ -55,6 +87,29 @@ export function Jobs() {
       setJobs(jobs.filter(job => job.id !== jobId));
     } catch (error) {
       console.error('Failed to delete job:', error);
+    }
+  };
+
+  const getJobStatus = (jobId: string) => {
+    const status = jobStatuses.get(jobId);
+    if (!status) return null;
+    
+    switch (status.status) {
+      case 'running':
+        return { icon: Loader2, text: 'Starting...', color: 'text-blue-400', spin: true };
+      case 'scanning':
+        return { 
+          icon: Loader2, 
+          text: status.switchName ? `Scanning ${status.switchName}` : 'Scanning...', 
+          color: 'text-cyan-400', 
+          spin: true 
+        };
+      case 'completed':
+        return { icon: CheckCircle, text: 'Completed', color: 'text-green-400', spin: false };
+      case 'failed':
+        return { icon: XCircle, text: 'Failed', color: 'text-red-400', spin: false };
+      default:
+        return null;
     }
   };
 
@@ -86,72 +141,94 @@ export function Jobs() {
 
       {/* Jobs Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-        {jobs.map((job) => (
-          <div key={job.id} className="bg-gray-800 rounded-xl border border-gray-700 hover:border-cyan-500/30 transition-all duration-200 group">
-            <div className="p-6">
-              {/* Job Header */}
-              <div className="flex items-start justify-between mb-4">
-                <div>
-                  <h3 className="text-lg font-semibold text-white group-hover:text-cyan-400 transition-colors">
-                    {job.name}
-                  </h3>
-                  <p className="text-sm text-gray-400">VLAN {job.vlan_id}</p>
+        {jobs.map((job) => {
+          const isExecuting = executingJobs.has(job.id);
+          const jobStatus = getJobStatus(job.id);
+          
+          return (
+            <div key={job.id} className="bg-gray-800 rounded-xl border border-gray-700 hover:border-cyan-500/30 transition-all duration-200 group">
+              <div className="p-6">
+                {/* Job Header */}
+                <div className="flex items-start justify-between mb-4">
+                  <div>
+                    <h3 className="text-lg font-semibold text-white group-hover:text-cyan-400 transition-colors">
+                      {job.name}
+                    </h3>
+                    <p className="text-sm text-gray-400">VLAN {job.vlan_id}</p>
+                  </div>
+                  <div className={`px-2 py-1 rounded-full text-xs font-medium ${
+                    job.is_active 
+                      ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                      : 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+                  }`}>
+                    {job.is_active ? 'Active' : 'Inactive'}
+                  </div>
                 </div>
-                <div className={`px-2 py-1 rounded-full text-xs font-medium ${
-                  job.is_active 
-                    ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                    : 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
-                }`}>
-                  {job.is_active ? 'Active' : 'Inactive'}
-                </div>
-              </div>
 
-              {/* Job Stats */}
-              <div className="grid grid-cols-2 gap-4 mb-4">
+                {/* Job Status */}
+                {jobStatus && (
+                  <div className="mb-4 p-3 bg-gray-700/50 rounded-lg border border-gray-600">
+                    <div className="flex items-center space-x-2">
+                      <jobStatus.icon className={`h-4 w-4 ${jobStatus.color} ${jobStatus.spin ? 'animate-spin' : ''}`} />
+                      <span className={`text-sm font-medium ${jobStatus.color}`}>
+                        {jobStatus.text}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Job Stats */}
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div className="flex items-center space-x-2">
+                    <Server className="h-4 w-4 text-cyan-400" />
+                    <span className="text-sm text-gray-300">{job.switch_count} switches</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Clock className="h-4 w-4 text-purple-400" />
+                    <span className="text-sm text-gray-300">
+                      {job.schedule_type === 'manual' ? 'Manual' : `${job.schedule_interval}min`}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Job Info */}
+                <div className="text-xs text-gray-500 mb-4">
+                  Created {formatDistanceToNow(new Date(job.created_at))} ago
+                </div>
+
+                {/* Actions */}
                 <div className="flex items-center space-x-2">
-                  <Server className="h-4 w-4 text-cyan-400" />
-                  <span className="text-sm text-gray-300">{job.switch_count} switches</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Clock className="h-4 w-4 text-purple-400" />
-                  <span className="text-sm text-gray-300">
-                    {job.schedule_type === 'manual' ? 'Manual' : `${job.schedule_interval}min`}
-                  </span>
-                </div>
-              </div>
-
-              {/* Job Info */}
-              <div className="text-xs text-gray-500 mb-4">
-                Created {formatDistanceToNow(new Date(job.created_at))} ago
-              </div>
-
-              {/* Actions */}
-              <div className="flex items-center space-x-2">
-                <Button
-                  size="sm"
-                  onClick={() => executeJob(job.id)}
-                  className="bg-green-600 hover:bg-green-700 flex-1"
-                >
-                  <Play className="h-3 w-3 mr-1" />
-                  Run
-                </Button>
-                <Link to={`/jobs/${job.id}`}>
-                  <Button size="sm" variant="outline" className="border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10">
-                    <Edit className="h-3 w-3" />
+                  <Button
+                    size="sm"
+                    onClick={() => executeJob(job.id)}
+                    disabled={isExecuting}
+                    className={`${isExecuting ? 'bg-gray-600' : 'bg-green-600 hover:bg-green-700'} flex-1 disabled:opacity-50`}
+                  >
+                    {isExecuting ? (
+                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    ) : (
+                      <Play className="h-3 w-3 mr-1" />
+                    )}
+                    {isExecuting ? 'Running' : 'Run'}
                   </Button>
-                </Link>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => deleteJob(job.id)}
-                  className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-                >
-                  <Trash2 className="h-3 w-3" />
-                </Button>
+                  <Link to={`/jobs/${job.id}`}>
+                    <Button size="sm" variant="outline" className="border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10">
+                      <Edit className="h-3 w-3" />
+                    </Button>
+                  </Link>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => deleteJob(job.id)}
+                    className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {jobs.length === 0 && (

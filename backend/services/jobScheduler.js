@@ -1,12 +1,14 @@
 import cron from 'node-cron';
 import { v4 as uuidv4 } from 'uuid';
 import { SNMPService } from './snmpService.js';
+import { VendorService } from './vendorService.js';
 
 export class JobScheduler {
   constructor(database, notificationService) {
     this.database = database;
     this.notificationService = notificationService;
     this.snmpService = new SNMPService();
+    this.vendorService = new VendorService();
     this.scheduledJobs = new Map();
     this.runningJobs = new Set();
   }
@@ -142,7 +144,7 @@ export class JobScheduler {
 
           totalDevicesFound += scanResult.macAddresses.length;
 
-          // Process each MAC address with interface information
+          // Process each MAC address with interface information and vendor lookup
           for (const macAddress of scanResult.macAddresses) {
             const interfaceInfo = scanResult.macDetails[macAddress];
             await this.processDevice(job, switchConfig, macAddress, interfaceInfo);
@@ -231,20 +233,30 @@ export class JobScheduler {
         [job.id, macAddress, switchConfig.id]
       );
 
+      // Get vendor information
+      let vendor = null;
+      try {
+        vendor = await this.vendorService.getVendor(macAddress);
+      } catch (error) {
+        console.error(`Failed to get vendor for ${macAddress}:`, error);
+      }
+
       if (existingDevice) {
-        // Update last seen, status, and interface information
+        // Update last seen, status, interface information, and vendor
         await this.database.run(
           `UPDATE known_devices SET 
            last_seen = CURRENT_TIMESTAMP, 
            status = "online",
            interface_name = ?,
            bridge_port = ?,
-           if_index = ?
+           if_index = ?,
+           vendor = ?
            WHERE id = ?`,
           [
             interfaceInfo?.interface || null,
             interfaceInfo?.bridgePort || null,
             interfaceInfo?.ifIndex || null,
+            vendor,
             existingDevice.id
           ]
         );
@@ -257,12 +269,12 @@ export class JobScheduler {
 
         const isAuthorized = !!whitelistEntry;
 
-        // Create new device with interface information
+        // Create new device with interface information and vendor
         const deviceId = uuidv4();
         await this.database.run(
           `INSERT INTO known_devices 
-           (id, job_id, mac_address, switch_id, vlan_id, interface_name, bridge_port, if_index, is_authorized, status, device_name)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, job_id, mac_address, switch_id, vlan_id, interface_name, bridge_port, if_index, vendor, is_authorized, status, device_name)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             deviceId,
             job.id,
@@ -272,13 +284,14 @@ export class JobScheduler {
             interfaceInfo?.interface || null,
             interfaceInfo?.bridgePort || null,
             interfaceInfo?.ifIndex || null,
+            vendor,
             isAuthorized,
             'online',
             whitelistEntry?.device_name || null
           ]
         );
 
-        console.log(`📱 New device discovered: ${macAddress} on ${interfaceInfo?.interface || 'unknown interface'} (${isAuthorized ? 'authorized' : 'unauthorized'})`);
+        console.log(`📱 New device discovered: ${macAddress} (${vendor || 'Unknown vendor'}) on ${interfaceInfo?.interface || 'unknown interface'} (${isAuthorized ? 'authorized' : 'unauthorized'})`);
       }
     } catch (error) {
       console.error(`Failed to process device ${macAddress}:`, error);

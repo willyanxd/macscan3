@@ -45,25 +45,6 @@ export function Navigation() {
           );
         })}
       </div>
-      
-      <div className="absolute bottom-4 left-4 right-4">
-        <div className="bg-gradient-to-r from-cyan-500/10 to-purple-500/10 rounded-lg p-4 border border-cyan-500/20">
-          <div className="flex items-center space-x-2 mb-2">
-            <Activity className="h-4 w-4 text-cyan-400" />
-            <span className="text-sm font-medium text-cyan-400">System Status</span>
-          </div>
-          <div className="text-xs text-gray-400">
-            <div className="flex justify-between">
-              <span>Active Jobs:</span>
-              <span className="text-green-400">Running</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Network:</span>
-              <span className="text-green-400">Connected</span>
-            </div>
-          </div>
-        </div>
-      </div>
     </nav>
   );
 }

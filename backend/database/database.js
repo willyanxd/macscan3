@@ -20,13 +20,21 @@ export class Database {
 
       this.db = new sqlite3.Database(this.dbPath);
       
+      // Enable foreign key constraints
+      await new Promise((resolve, reject) => {
+        this.db.run('PRAGMA foreign_keys = ON', (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+      
       // Promisify database methods
       this.db.run = promisify(this.db.run.bind(this.db));
       this.db.get = promisify(this.db.get.bind(this.db));
       this.db.all = promisify(this.db.all.bind(this.db));
 
       await this.createTables();
-      console.log('✅ Database connection established');
+      console.log('✅ Database connection established with foreign key constraints enabled');
     } catch (error) {
       console.error('❌ Database initialization failed:', error);
       throw error;
@@ -62,7 +70,7 @@ export class Database {
         FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE
       )`,
 
-      // Known devices table - Updated to include interface information
+      // Known devices table - Updated to include vendor information
       `CREATE TABLE IF NOT EXISTS known_devices (
         id TEXT PRIMARY KEY,
         job_id TEXT NOT NULL,
@@ -72,6 +80,7 @@ export class Database {
         interface_name TEXT,
         bridge_port INTEGER,
         if_index INTEGER,
+        vendor TEXT,
         is_authorized BOOLEAN DEFAULT 0,
         first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
         last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -125,6 +134,9 @@ export class Database {
       await this.db.run(table);
     }
 
+    // Add vendor column if it doesn't exist
+    await this.addVendorColumn();
+
     // Create indexes for better performance
     const indexes = [
       'CREATE INDEX IF NOT EXISTS idx_known_devices_job_id ON known_devices(job_id)',
@@ -142,6 +154,22 @@ export class Database {
 
     // Migrate existing switches table if needed
     await this.migrateSwitchesTable();
+  }
+
+  async addVendorColumn() {
+    try {
+      // Check if vendor column exists
+      const tableInfo = await this.db.all("PRAGMA table_info(known_devices)");
+      const hasVendorColumn = tableInfo.some(col => col.name === 'vendor');
+      
+      if (!hasVendorColumn) {
+        console.log('🔄 Adding vendor column to known_devices table...');
+        await this.db.run('ALTER TABLE known_devices ADD COLUMN vendor TEXT');
+        console.log('✅ Vendor column added successfully');
+      }
+    } catch (error) {
+      console.error('Migration error (non-critical):', error.message);
+    }
   }
 
   async migrateSwitchesTable() {
