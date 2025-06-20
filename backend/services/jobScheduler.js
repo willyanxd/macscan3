@@ -1,12 +1,12 @@
 import cron from 'node-cron';
 import { v4 as uuidv4 } from 'uuid';
-import { SSHService } from './sshService.js';
+import { SNMPService } from './snmpService.js';
 
 export class JobScheduler {
   constructor(database, notificationService) {
     this.database = database;
     this.notificationService = notificationService;
-    this.sshService = new SSHService();
+    this.snmpService = new SNMPService();
     this.scheduledJobs = new Map();
     this.runningJobs = new Set();
   }
@@ -103,25 +103,30 @@ export class JobScheduler {
       let unauthorizedDevices = 0;
       const errors = [];
 
-      // Scan each switch
+      // Scan each switch via SNMP
       for (const switchConfig of switches) {
         try {
           console.log(`🔍 Scanning switch: ${switchConfig.name} (${switchConfig.host})`);
           
-          const macAddresses = await this.sshService.scanMacAddresses(
-            switchConfig,
+          const scanResult = await this.snmpService.scanMacAddresses(
+            {
+              host: switchConfig.host,
+              community: switchConfig.community,
+              version: switchConfig.version || '2c'
+            },
             job.vlan_id
           );
 
-          totalDevicesFound += macAddresses.length;
+          totalDevicesFound += scanResult.macAddresses.length;
 
-          // Process each MAC address
-          for (const macAddress of macAddresses) {
-            await this.processDevice(job, switchConfig, macAddress);
+          // Process each MAC address with interface information
+          for (const macAddress of scanResult.macAddresses) {
+            const interfaceInfo = scanResult.macDetails[macAddress];
+            await this.processDevice(job, switchConfig, macAddress, interfaceInfo);
           }
 
           // Update device statuses
-          await this.updateDeviceStatuses(jobId, switchConfig.id, macAddresses);
+          await this.updateDeviceStatuses(jobId, switchConfig.id, scanResult.macAddresses);
 
         } catch (error) {
           console.error(`❌ Failed to scan switch ${switchConfig.name}:`, error);
@@ -180,7 +185,7 @@ export class JobScheduler {
     }
   }
 
-  async processDevice(job, switchConfig, macAddress) {
+  async processDevice(job, switchConfig, macAddress, interfaceInfo) {
     try {
       // Check if device exists
       const existingDevice = await this.database.get(
@@ -189,10 +194,21 @@ export class JobScheduler {
       );
 
       if (existingDevice) {
-        // Update last seen and status
+        // Update last seen, status, and interface information
         await this.database.run(
-          'UPDATE known_devices SET last_seen = CURRENT_TIMESTAMP, status = "online" WHERE id = ?',
-          [existingDevice.id]
+          `UPDATE known_devices SET 
+           last_seen = CURRENT_TIMESTAMP, 
+           status = "online",
+           interface_name = ?,
+           bridge_port = ?,
+           if_index = ?
+           WHERE id = ?`,
+          [
+            interfaceInfo?.interface || null,
+            interfaceInfo?.bridgePort || null,
+            interfaceInfo?.ifIndex || null,
+            existingDevice.id
+          ]
         );
       } else {
         // Check if device is in whitelist
@@ -203,25 +219,28 @@ export class JobScheduler {
 
         const isAuthorized = !!whitelistEntry;
 
-        // Create new device
+        // Create new device with interface information
         const deviceId = uuidv4();
         await this.database.run(
           `INSERT INTO known_devices 
-           (id, job_id, mac_address, switch_id, vlan_id, is_authorized, status, device_name)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, job_id, mac_address, switch_id, vlan_id, interface_name, bridge_port, if_index, is_authorized, status, device_name)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             deviceId,
             job.id,
             macAddress,
             switchConfig.id,
             job.vlan_id,
+            interfaceInfo?.interface || null,
+            interfaceInfo?.bridgePort || null,
+            interfaceInfo?.ifIndex || null,
             isAuthorized,
             'online',
             whitelistEntry?.device_name || null
           ]
         );
 
-        console.log(`📱 New device discovered: ${macAddress} (${isAuthorized ? 'authorized' : 'unauthorized'})`);
+        console.log(`📱 New device discovered: ${macAddress} on ${interfaceInfo?.interface || 'unknown interface'} (${isAuthorized ? 'authorized' : 'unauthorized'})`);
       }
     } catch (error) {
       console.error(`Failed to process device ${macAddress}:`, error);
@@ -374,6 +393,10 @@ export class JobScheduler {
     }
     
     this.scheduledJobs.clear();
+    
+    // Close SNMP sessions
+    this.snmpService.closeAllSessions();
+    
     console.log('✅ Job scheduler shutdown complete');
   }
 }

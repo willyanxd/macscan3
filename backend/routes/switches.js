@@ -1,31 +1,30 @@
-import { SSHService } from '../services/sshService.js';
+import { SNMPService } from '../services/snmpService.js';
 
-const sshService = new SSHService();
+const snmpService = new SNMPService();
 
 export function switchRoutes(app, database) {
-  // Enhanced switch connection test with detailed debugging
+  // Enhanced switch connection test with SNMP
   app.post('/api/switches/test', async (req, res) => {
     try {
-      const { host, port = 22, username, password } = req.body;
+      const { host, community = 'public', version = '2c' } = req.body;
 
-      if (!host || !username || !password) {
+      if (!host || !community) {
         return res.status(400).json({ 
-          error: 'Host, username, and password are required',
-          details: { host: !!host, username: !!username, password: !!password }
+          error: 'Host and community are required',
+          details: { host: !!host, community: !!community }
         });
       }
 
-      console.log(`Testing connection to ${host}:${port} with user ${username}`);
-      const result = await sshService.testConnection({
+      console.log(`Testing SNMP connection to ${host} with community ${community}`);
+      const result = await snmpService.testConnection({
         host,
-        port: parseInt(port),
-        username,
-        password
+        community,
+        version
       });
 
       res.json(result);
     } catch (error) {
-      console.error('Switch connection test failed:', error);
+      console.error('Switch SNMP test failed:', error);
       res.json({ 
         success: false, 
         message: error.message,
@@ -37,20 +36,19 @@ export function switchRoutes(app, database) {
     }
   });
 
-  // Get switch information and capabilities
+  // Get switch information via SNMP
   app.post('/api/switches/info', async (req, res) => {
     try {
-      const { host, port = 22, username, password } = req.body;
+      const { host, community = 'public', version = '2c' } = req.body;
 
-      if (!host || !username || !password) {
-        return res.status(400).json({ error: 'Host, username, and password are required' });
+      if (!host || !community) {
+        return res.status(400).json({ error: 'Host and community are required' });
       }
 
-      const switchInfo = await sshService.getSwitchInfo({
+      const switchInfo = await snmpService.getSwitchInfo({
         host,
-        port: parseInt(port),
-        username,
-        password
+        community,
+        version
       });
 
       res.json(switchInfo);
@@ -60,53 +58,22 @@ export function switchRoutes(app, database) {
     }
   });
 
-  // Execute command on switch with enhanced debugging
-  app.post('/api/switches/:id/execute', async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { command } = req.body;
-
-      if (!command) {
-        return res.status(400).json({ error: 'Command is required' });
-      }
-
-      const switchConfig = await database.get('SELECT * FROM switches WHERE id = ?', [id]);
-      if (!switchConfig) {
-        return res.status(404).json({ error: 'Switch not found' });
-      }
-
-      console.log(`Executing command on switch ${switchConfig.name}: ${command}`);
-      const result = await sshService.executeCommand(switchConfig, command);
-      res.json(result);
-    } catch (error) {
-      console.error('Command execution failed:', error);
-      res.status(500).json({ 
-        error: error.message,
-        details: {
-          command: req.body.command,
-          switchId: req.params.id
-        }
-      });
-    }
-  });
-
-  // Test MAC scanning on a switch
+  // Test MAC scanning on a switch via SNMP
   app.post('/api/switches/test-scan', async (req, res) => {
     try {
-      const { host, port = 22, username, password, vlan_id } = req.body;
+      const { host, community = 'public', version = '2c', vlan_id } = req.body;
 
-      if (!host || !username || !password || !vlan_id) {
+      if (!host || !community || !vlan_id) {
         return res.status(400).json({ 
-          error: 'Host, username, password, and VLAN ID are required' 
+          error: 'Host, community, and VLAN ID are required' 
         });
       }
 
       console.log(`Testing MAC scan on ${host} for VLAN ${vlan_id}`);
-      const scanResult = await sshService.scanMacAddresses({
+      const scanResult = await snmpService.testMacScan({
         host,
-        port: parseInt(port),
-        username,
-        password
+        community,
+        version
       }, parseInt(vlan_id));
 
       res.json(scanResult);
@@ -135,8 +102,8 @@ export function switchRoutes(app, database) {
     }
   });
 
-  // Create interactive SSH shell
-  app.post('/api/switches/:id/shell', async (req, res) => {
+  // Get switch status and basic info
+  app.get('/api/switches/:id/status', async (req, res) => {
     try {
       const { id } = req.params;
 
@@ -145,17 +112,25 @@ export function switchRoutes(app, database) {
         return res.status(404).json({ error: 'Switch not found' });
       }
 
-      // For now, return connection details for frontend to handle
+      // Test connection to get current status
+      const connectionTest = await snmpService.testConnection({
+        host: switchConfig.host,
+        community: switchConfig.community,
+        version: switchConfig.version || '2c'
+      });
+
       res.json({
-        message: 'Shell connection details',
         switch: {
           name: switchConfig.name,
           host: switchConfig.host,
-          port: switchConfig.port
-        }
+          community: switchConfig.community
+        },
+        status: connectionTest.success ? 'online' : 'offline',
+        lastCheck: new Date().toISOString(),
+        details: connectionTest.details
       });
     } catch (error) {
-      console.error('Failed to create shell:', error);
+      console.error('Failed to get switch status:', error);
       res.status(500).json({ error: error.message });
     }
   });

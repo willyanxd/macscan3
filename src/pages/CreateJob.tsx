@@ -9,9 +9,8 @@ import { Select } from '../components/Select';
 interface SwitchConfig {
   name: string;
   host: string;
-  port: number;
-  username: string;
-  password: string;
+  community: string;
+  version: string;
   tested: boolean;
   testResult?: any;
 }
@@ -34,9 +33,8 @@ export function CreateJob() {
     setSwitches([...switches, {
       name: '',
       host: '',
-      port: 22,
-      username: '',
-      password: '',
+      community: 'public',
+      version: '2c',
       tested: false
     }]);
   };
@@ -45,7 +43,7 @@ export function CreateJob() {
     setSwitches(switches.filter((_, i) => i !== index));
   };
 
-  const updateSwitch = (index: number, field: keyof SwitchConfig, value: string | number) => {
+  const updateSwitch = (index: number, field: keyof SwitchConfig, value: string) => {
     const updated = [...switches];
     updated[index] = { ...updated[index], [field]: value, tested: false };
     setSwitches(updated);
@@ -61,9 +59,8 @@ export function CreateJob() {
 
       const response = await api.post('/switches/test', {
         host: switchConfig.host,
-        port: switchConfig.port,
-        username: switchConfig.username,
-        password: switchConfig.password
+        community: switchConfig.community,
+        version: switchConfig.version
       });
 
       updated[index] = { 
@@ -79,7 +76,7 @@ export function CreateJob() {
         tested: true, 
         testResult: { 
           success: false, 
-          message: 'Connection test failed',
+          message: 'SNMP connection test failed',
           details: { error: 'NETWORK_ERROR' }
         } 
       };
@@ -98,14 +95,13 @@ export function CreateJob() {
     try {
       const response = await api.post('/switches/test-scan', {
         host: switchConfig.host,
-        port: switchConfig.port,
-        username: switchConfig.username,
-        password: switchConfig.password,
+        community: switchConfig.community,
+        version: switchConfig.version,
         vlan_id: parseInt(formData.vlan_id)
       });
 
       if (response.data.success) {
-        alert(`MAC scan successful! Found ${response.data.macAddresses.length} devices using ${response.data.switchType} commands.`);
+        alert(`MAC scan successful! Found ${response.data.macCount} devices on VLAN ${formData.vlan_id}.`);
       } else {
         alert('MAC scan failed. Check VLAN ID and switch configuration.');
       }
@@ -158,7 +154,7 @@ export function CreateJob() {
           <h1 className="text-3xl font-bold bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">
             Create New Job
           </h1>
-          <p className="text-gray-400 mt-1">Configure a network scanning job with enhanced switch support</p>
+          <p className="text-gray-400 mt-1">Configure a network scanning job with SNMP support</p>
         </div>
       </div>
 
@@ -191,7 +187,7 @@ export function CreateJob() {
                 <ul className="mt-1 space-y-1 text-blue-200">
                   <li>• Choose a descriptive name that identifies the network segment</li>
                   <li>• VLAN ID must exist on all configured switches</li>
-                  <li>• Test all switch connections before saving</li>
+                  <li>• Test all switch SNMP connections before saving</li>
                 </ul>
               </div>
             </div>
@@ -268,7 +264,7 @@ export function CreateJob() {
         {/* Enhanced Switches Configuration */}
         <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold text-white">Switch Configuration</h2>
+            <h2 className="text-xl font-semibold text-white">Switch Configuration (SNMP)</h2>
             <Button
               type="button"
               onClick={addSwitch}
@@ -298,11 +294,11 @@ export function CreateJob() {
                       type="button"
                       size="sm"
                       onClick={() => testConnection(index)}
-                      disabled={!switchConfig.host || !switchConfig.username || !switchConfig.password}
+                      disabled={!switchConfig.host || !switchConfig.community}
                       className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
                     >
                       <TestTube className="h-3 w-3 mr-1" />
-                      Test Connection
+                      Test SNMP
                     </Button>
                     <Button
                       type="button"
@@ -325,7 +321,7 @@ export function CreateJob() {
                   </div>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
                   <Input
                     label="Switch Name"
                     value={switchConfig.name}
@@ -341,26 +337,20 @@ export function CreateJob() {
                     required
                   />
                   <Input
-                    label="SSH Port"
-                    type="number"
-                    value={switchConfig.port}
-                    onChange={(e) => updateSwitch(index, 'port', parseInt(e.target.value))}
-                    placeholder="22"
-                  />
-                  <Input
-                    label="Username"
-                    value={switchConfig.username}
-                    onChange={(e) => updateSwitch(index, 'username', e.target.value)}
-                    placeholder="admin"
+                    label="SNMP Community"
+                    value={switchConfig.community}
+                    onChange={(e) => updateSwitch(index, 'community', e.target.value)}
+                    placeholder="public"
                     required
                   />
-                  <Input
-                    label="Password"
-                    type="password"
-                    value={switchConfig.password}
-                    onChange={(e) => updateSwitch(index, 'password', e.target.value)}
-                    placeholder="Enter password"
-                    required
+                  <Select
+                    label="SNMP Version"
+                    value={switchConfig.version}
+                    onChange={(e) => updateSwitch(index, 'version', e.target.value)}
+                    options={[
+                      { value: '1', label: 'Version 1' },
+                      { value: '2c', label: 'Version 2c' }
+                    ]}
                   />
                 </div>
 
@@ -388,8 +378,8 @@ export function CreateJob() {
                             {switchConfig.testResult.details.connectionTime && (
                               <p>Connection time: {switchConfig.testResult.details.connectionTime}ms</p>
                             )}
-                            {switchConfig.testResult.details.sshVersion && (
-                              <p>SSH Version: {switchConfig.testResult.details.sshVersion}</p>
+                            {switchConfig.testResult.details.systemInfo && (
+                              <p>System: {switchConfig.testResult.details.systemInfo.substring(0, 100)}...</p>
                             )}
                             {switchConfig.testResult.details.error && (
                               <p className="text-red-400">Error: {switchConfig.testResult.details.error}</p>
@@ -411,7 +401,7 @@ export function CreateJob() {
                   <Plus className="h-8 w-8 text-gray-500" />
                 </div>
                 <h3 className="text-lg font-medium text-gray-400 mb-2">No switches configured</h3>
-                <p className="text-gray-500">Add at least one switch to scan for MAC addresses.</p>
+                <p className="text-gray-500">Add at least one switch to scan for MAC addresses via SNMP.</p>
               </div>
             </div>
           )}

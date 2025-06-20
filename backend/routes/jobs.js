@@ -101,19 +101,18 @@ export function jobRoutes(app, database, jobScheduler) {
           ]
         );
 
-        // Create switches
+        // Create switches with SNMP configuration
         for (const switchConfig of switches) {
           const switchId = uuidv4();
           await database.run(
-            'INSERT INTO switches (id, job_id, name, host, port, username, password) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO switches (id, job_id, name, host, community, version) VALUES (?, ?, ?, ?, ?, ?)',
             [
               switchId,
               jobId,
               switchConfig.name,
               switchConfig.host,
-              switchConfig.port || 22,
-              switchConfig.username,
-              switchConfig.password
+              switchConfig.community || 'public',
+              switchConfig.version || '2c'
             ]
           );
         }
@@ -187,15 +186,14 @@ export function jobRoutes(app, database, jobScheduler) {
         for (const switchConfig of switches) {
           const switchId = uuidv4();
           await database.run(
-            'INSERT INTO switches (id, job_id, name, host, port, username, password) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO switches (id, job_id, name, host, community, version) VALUES (?, ?, ?, ?, ?, ?)',
             [
               switchId,
               id,
               switchConfig.name,
               switchConfig.host,
-              switchConfig.port || 22,
-              switchConfig.username,
-              switchConfig.password
+              switchConfig.community || 'public',
+              switchConfig.version || '2c'
             ]
           );
         }

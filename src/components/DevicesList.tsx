@@ -10,7 +10,8 @@ import {
   Filter,
   Search,
   Download,
-  UserPlus
+  UserPlus,
+  Network
 } from 'lucide-react';
 import { api } from '../services/api';
 import { Button } from './Button';
@@ -23,6 +24,9 @@ interface Device {
   switch_name: string;
   switch_host: string;
   vlan_id: number;
+  interface_name: string | null;
+  bridge_port: number | null;
+  if_index: number | null;
   is_authorized: boolean;
   first_seen: string;
   last_seen: string;
@@ -119,9 +123,9 @@ export function DevicesList({ jobId }: DevicesListProps) {
 
   const exportDevices = () => {
     const csvContent = [
-      'MAC Address,Device Name,Switch,Status,Authorization,First Seen,Last Seen',
+      'MAC Address,Device Name,Switch,Interface,Status,Authorization,First Seen,Last Seen',
       ...filteredDevices.map(device => 
-        `${device.mac_address},${device.device_name || ''},${device.switch_name},${device.status},${device.is_authorized ? 'Authorized' : 'Unauthorized'},${device.first_seen},${device.last_seen}`
+        `${device.mac_address},${device.device_name || ''},${device.switch_name},${device.interface_name || ''},${device.status},${device.is_authorized ? 'Authorized' : 'Unauthorized'},${device.first_seen},${device.last_seen}`
       )
     ].join('\n');
 
@@ -137,7 +141,8 @@ export function DevicesList({ jobId }: DevicesListProps) {
   const filteredDevices = devices.filter(device =>
     device.mac_address.toLowerCase().includes(searchTerm.toLowerCase()) ||
     (device.device_name && device.device_name.toLowerCase().includes(searchTerm.toLowerCase())) ||
-    device.switch_name.toLowerCase().includes(searchTerm.toLowerCase())
+    device.switch_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (device.interface_name && device.interface_name.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
   if (loading) {
@@ -202,7 +207,7 @@ export function DevicesList({ jobId }: DevicesListProps) {
                   Device
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">
-                  Switch
+                  Switch & Interface
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">
                   Status
@@ -257,6 +262,12 @@ export function DevicesList({ jobId }: DevicesListProps) {
                     <div>
                       <div className="text-sm text-white">{device.switch_name}</div>
                       <div className="text-sm text-gray-400">{device.switch_host}</div>
+                      {device.interface_name && (
+                        <div className="flex items-center space-x-1 text-xs text-cyan-400 mt-1">
+                          <Network className="h-3 w-3" />
+                          <span>{device.interface_name}</span>
+                        </div>
+                      )}
                     </div>
                   </td>
                   

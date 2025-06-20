@@ -50,26 +50,28 @@ export class Database {
         is_active BOOLEAN DEFAULT 1
       )`,
 
-      // Switches table
+      // Switches table - Updated for SNMP
       `CREATE TABLE IF NOT EXISTS switches (
         id TEXT PRIMARY KEY,
         job_id TEXT NOT NULL,
         name TEXT NOT NULL,
         host TEXT NOT NULL,
-        port INTEGER DEFAULT 22,
-        username TEXT NOT NULL,
-        password TEXT NOT NULL,
+        community TEXT NOT NULL DEFAULT 'public',
+        version TEXT DEFAULT '2c',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE
       )`,
 
-      // Known devices table
+      // Known devices table - Updated to include interface information
       `CREATE TABLE IF NOT EXISTS known_devices (
         id TEXT PRIMARY KEY,
         job_id TEXT NOT NULL,
         mac_address TEXT NOT NULL,
         switch_id TEXT NOT NULL,
         vlan_id INTEGER,
+        interface_name TEXT,
+        bridge_port INTEGER,
+        if_index INTEGER,
         is_authorized BOOLEAN DEFAULT 0,
         first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
         last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -127,6 +129,7 @@ export class Database {
     const indexes = [
       'CREATE INDEX IF NOT EXISTS idx_known_devices_job_id ON known_devices(job_id)',
       'CREATE INDEX IF NOT EXISTS idx_known_devices_mac ON known_devices(mac_address)',
+      'CREATE INDEX IF NOT EXISTS idx_known_devices_interface ON known_devices(interface_name)',
       'CREATE INDEX IF NOT EXISTS idx_job_history_job_id ON job_history(job_id)',
       'CREATE INDEX IF NOT EXISTS idx_notifications_job_id ON notifications(job_id)',
       'CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(is_read)',
@@ -135,6 +138,50 @@ export class Database {
 
     for (const index of indexes) {
       await this.db.run(index);
+    }
+
+    // Migrate existing switches table if needed
+    await this.migrateSwitchesTable();
+  }
+
+  async migrateSwitchesTable() {
+    try {
+      // Check if old columns exist and migrate
+      const tableInfo = await this.db.all("PRAGMA table_info(switches)");
+      const columnNames = tableInfo.map(col => col.name);
+      
+      if (columnNames.includes('username') || columnNames.includes('password')) {
+        console.log('🔄 Migrating switches table from SSH to SNMP...');
+        
+        // Create new table with SNMP fields
+        await this.db.run(`
+          CREATE TABLE IF NOT EXISTS switches_new (
+            id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            host TEXT NOT NULL,
+            community TEXT NOT NULL DEFAULT 'public',
+            version TEXT DEFAULT '2c',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE
+          )
+        `);
+        
+        // Copy data, converting SSH configs to SNMP defaults
+        await this.db.run(`
+          INSERT INTO switches_new (id, job_id, name, host, community, version, created_at)
+          SELECT id, job_id, name, host, 'public', '2c', created_at
+          FROM switches
+        `);
+        
+        // Drop old table and rename new one
+        await this.db.run('DROP TABLE switches');
+        await this.db.run('ALTER TABLE switches_new RENAME TO switches');
+        
+        console.log('✅ Switches table migrated to SNMP');
+      }
+    } catch (error) {
+      console.error('Migration error (non-critical):', error.message);
     }
   }
 

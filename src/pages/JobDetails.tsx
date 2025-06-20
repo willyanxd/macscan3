@@ -13,11 +13,11 @@ import {
   CheckCircle,
   XCircle,
   Plus,
-  Terminal,
   Settings,
   List,
   History,
-  UserCheck
+  UserCheck,
+  Network
 } from 'lucide-react';
 import { api } from '../services/api';
 import { Button } from '../components/Button';
@@ -25,7 +25,6 @@ import { DevicesList } from '../components/DevicesList';
 import { JobHistory } from '../components/JobHistory';
 import { WhitelistManager } from '../components/WhitelistManager';
 import { EditJobModal } from '../components/EditJobModal';
-import { SwitchConsole } from '../components/SwitchConsole';
 import { formatDistanceToNow } from 'date-fns';
 
 interface JobDetails {
@@ -44,7 +43,8 @@ interface JobDetails {
     id: string;
     name: string;
     host: string;
-    port: number;
+    community: string;
+    version: string;
   }>;
   device_count: number;
   last_execution?: {
@@ -61,8 +61,6 @@ export function JobDetails() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('devices');
   const [showEditModal, setShowEditModal] = useState(false);
-  const [showConsole, setShowConsole] = useState(false);
-  const [selectedSwitch, setSelectedSwitch] = useState<any>(null);
   const [executing, setExecuting] = useState(false);
 
   useEffect(() => {
@@ -112,9 +110,22 @@ export function JobDetails() {
     }
   };
 
-  const openSwitchConsole = (switchConfig: any) => {
-    setSelectedSwitch(switchConfig);
-    setShowConsole(true);
+  const testSwitchConnection = async (switchConfig: any) => {
+    try {
+      const response = await api.post('/switches/test', {
+        host: switchConfig.host,
+        community: switchConfig.community,
+        version: switchConfig.version
+      });
+      
+      if (response.data.success) {
+        alert(`SNMP connection to ${switchConfig.name} successful!`);
+      } else {
+        alert(`SNMP connection to ${switchConfig.name} failed: ${response.data.message}`);
+      }
+    } catch (error) {
+      alert(`SNMP connection test failed for ${switchConfig.name}`);
+    }
   };
 
   const tabs = [
@@ -288,7 +299,7 @@ export function JobDetails() {
 
       {/* Switches List */}
       <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
-        <h2 className="text-xl font-semibold text-white mb-4">Configured Switches</h2>
+        <h2 className="text-xl font-semibold text-white mb-4">Configured Switches (SNMP)</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {job.switches.map((switchConfig) => (
             <div key={switchConfig.id} className="bg-gray-700 rounded-lg p-4 border border-gray-600 hover:border-cyan-500/30 transition-colors">
@@ -299,14 +310,17 @@ export function JobDetails() {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => openSwitchConsole(switchConfig)}
+                    onClick={() => testSwitchConnection(switchConfig)}
                     className="border-gray-500/30 text-gray-400 hover:text-white"
                   >
-                    <Terminal className="h-3 w-3" />
+                    <Network className="h-3 w-3" />
                   </Button>
                 </div>
               </div>
-              <p className="text-sm text-gray-400">{switchConfig.host}:{switchConfig.port}</p>
+              <p className="text-sm text-gray-400">{switchConfig.host}</p>
+              <div className="text-xs text-gray-500 mt-1">
+                Community: {switchConfig.community} • Version: {switchConfig.version}
+              </div>
             </div>
           ))}
         </div>
@@ -350,16 +364,6 @@ export function JobDetails() {
           onSave={() => {
             setShowEditModal(false);
             fetchJobDetails();
-          }}
-        />
-      )}
-
-      {showConsole && selectedSwitch && (
-        <SwitchConsole
-          switchConfig={selectedSwitch}
-          onClose={() => {
-            setShowConsole(false);
-            setSelectedSwitch(null);
           }}
         />
       )}

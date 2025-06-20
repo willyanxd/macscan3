@@ -14,9 +14,8 @@ interface EditJobModalProps {
 interface SwitchConfig {
   name: string;
   host: string;
-  port: number;
-  username: string;
-  password: string;
+  community: string;
+  version: string;
 }
 
 export function EditJobModal({ job, onClose, onSave }: EditJobModalProps) {
@@ -38,9 +37,8 @@ export function EditJobModal({ job, onClose, onSave }: EditJobModalProps) {
       setSwitches(job.switches.map((s: any) => ({
         name: s.name,
         host: s.host,
-        port: s.port,
-        username: s.username || '',
-        password: '' // Don't pre-fill password for security
+        community: s.community || 'public',
+        version: s.version || '2c'
       })));
     }
   }, [job]);
@@ -49,9 +47,8 @@ export function EditJobModal({ job, onClose, onSave }: EditJobModalProps) {
     setSwitches([...switches, {
       name: '',
       host: '',
-      port: 22,
-      username: '',
-      password: ''
+      community: 'public',
+      version: '2c'
     }]);
   };
 
@@ -59,7 +56,7 @@ export function EditJobModal({ job, onClose, onSave }: EditJobModalProps) {
     setSwitches(switches.filter((_, i) => i !== index));
   };
 
-  const updateSwitch = (index: number, field: keyof SwitchConfig, value: string | number) => {
+  const updateSwitch = (index: number, field: keyof SwitchConfig, value: string) => {
     const updated = [...switches];
     updated[index] = { ...updated[index], [field]: value };
     setSwitches(updated);
@@ -68,14 +65,18 @@ export function EditJobModal({ job, onClose, onSave }: EditJobModalProps) {
   const testConnection = async (index: number) => {
     const switchConfig = switches[index];
     try {
-      const response = await api.post('/switches/test', switchConfig);
+      const response = await api.post('/switches/test', {
+        host: switchConfig.host,
+        community: switchConfig.community,
+        version: switchConfig.version
+      });
       if (response.data.success) {
-        alert('Connection successful!');
+        alert('SNMP connection successful!');
       } else {
-        alert(`Connection failed: ${response.data.message}`);
+        alert(`SNMP connection failed: ${response.data.message}`);
       }
     } catch (error) {
-      alert('Connection test failed');
+      alert('SNMP connection test failed');
     }
   };
 
@@ -199,7 +200,7 @@ export function EditJobModal({ job, onClose, onSave }: EditJobModalProps) {
           {/* Switches Configuration */}
           <div>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-white">Switches</h3>
+              <h3 className="text-lg font-semibold text-white">Switches (SNMP)</h3>
               <Button
                 type="button"
                 onClick={addSwitch}
@@ -223,7 +224,7 @@ export function EditJobModal({ job, onClose, onSave }: EditJobModalProps) {
                         className="bg-green-600 hover:bg-green-700"
                       >
                         <TestTube className="h-3 w-3 mr-1" />
-                        Test
+                        Test SNMP
                       </Button>
                       <Button
                         type="button"
@@ -237,7 +238,7 @@ export function EditJobModal({ job, onClose, onSave }: EditJobModalProps) {
                     </div>
                   </div>
                   
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <Input
                       label="Switch Name"
                       value={switchConfig.name}
@@ -251,23 +252,19 @@ export function EditJobModal({ job, onClose, onSave }: EditJobModalProps) {
                       required
                     />
                     <Input
-                      label="Port"
-                      type="number"
-                      value={switchConfig.port}
-                      onChange={(e) => updateSwitch(index, 'port', parseInt(e.target.value))}
-                    />
-                    <Input
-                      label="Username"
-                      value={switchConfig.username}
-                      onChange={(e) => updateSwitch(index, 'username', e.target.value)}
+                      label="SNMP Community"
+                      value={switchConfig.community}
+                      onChange={(e) => updateSwitch(index, 'community', e.target.value)}
                       required
                     />
-                    <Input
-                      label="Password"
-                      type="password"
-                      value={switchConfig.password}
-                      onChange={(e) => updateSwitch(index, 'password', e.target.value)}
-                      placeholder="Enter new password or leave blank to keep current"
+                    <Select
+                      label="SNMP Version"
+                      value={switchConfig.version}
+                      onChange={(e) => updateSwitch(index, 'version', e.target.value)}
+                      options={[
+                        { value: '1', label: 'Version 1' },
+                        { value: '2c', label: 'Version 2c' }
+                      ]}
                     />
                   </div>
                 </div>
