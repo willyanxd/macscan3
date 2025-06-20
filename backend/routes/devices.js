@@ -1,11 +1,11 @@
 import { v4 as uuidv4 } from 'uuid';
 
 export function deviceRoutes(app, database) {
-  // Get devices for a job
+  // Get devices for a job with pagination support
   app.get('/api/jobs/:jobId/devices', async (req, res) => {
     try {
       const { jobId } = req.params;
-      const { limit = 100, offset = 0, status, authorized } = req.query;
+      const { limit = 20, offset = 0, status, authorized, search } = req.query;
 
       let query = `
         SELECT kd.*, s.name as switch_name, s.host as switch_host
@@ -25,6 +25,18 @@ export function deviceRoutes(app, database) {
         params.push(authorized === 'true' ? 1 : 0);
       }
 
+      if (search) {
+        query += ` AND (
+          kd.mac_address LIKE ? OR 
+          kd.device_name LIKE ? OR 
+          kd.vendor LIKE ? OR 
+          s.name LIKE ? OR 
+          kd.interface_name LIKE ?
+        )`;
+        const searchPattern = `%${search}%`;
+        params.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern);
+      }
+
       query += ' ORDER BY kd.last_seen DESC LIMIT ? OFFSET ?';
       params.push(parseInt(limit), parseInt(offset));
 
@@ -33,6 +45,50 @@ export function deviceRoutes(app, database) {
     } catch (error) {
       console.error('Failed to fetch devices:', error);
       res.status(500).json({ error: 'Failed to fetch devices' });
+    }
+  });
+
+  // Get device count for pagination
+  app.get('/api/jobs/:jobId/devices/count', async (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const { status, authorized, search } = req.query;
+
+      let query = `
+        SELECT COUNT(*) as total
+        FROM known_devices kd
+        LEFT JOIN switches s ON kd.switch_id = s.id
+        WHERE kd.job_id = ?
+      `;
+      const params = [jobId];
+
+      if (status) {
+        query += ' AND kd.status = ?';
+        params.push(status);
+      }
+
+      if (authorized !== undefined) {
+        query += ' AND kd.is_authorized = ?';
+        params.push(authorized === 'true' ? 1 : 0);
+      }
+
+      if (search) {
+        query += ` AND (
+          kd.mac_address LIKE ? OR 
+          kd.device_name LIKE ? OR 
+          kd.vendor LIKE ? OR 
+          s.name LIKE ? OR 
+          kd.interface_name LIKE ?
+        )`;
+        const searchPattern = `%${search}%`;
+        params.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern);
+      }
+
+      const result = await database.get(query, params);
+      res.json({ total: result.total });
+    } catch (error) {
+      console.error('Failed to fetch device count:', error);
+      res.status(500).json({ error: 'Failed to fetch device count' });
     }
   });
 

@@ -123,9 +123,19 @@ export function CreateJob() {
         return;
       }
 
+      // Validate schedule interval for automatic jobs
+      if (formData.schedule_type === 'interval') {
+        if (!formData.schedule_interval || formData.schedule_interval < 1) {
+          alert('Please enter a valid schedule interval (minimum 1 minute).');
+          setLoading(false);
+          return;
+        }
+      }
+
       const jobData = {
         ...formData,
         vlan_id: parseInt(formData.vlan_id),
+        schedule_interval: formData.schedule_type === 'interval' ? formData.schedule_interval : null,
         switches: switches.map(({ tested, testResult, ...s }) => s) // Remove test data
       };
 
@@ -177,6 +187,8 @@ export function CreateJob() {
               onChange={(e) => setFormData({ ...formData, vlan_id: e.target.value })}
               required
               placeholder="Enter VLAN ID to scan"
+              min="1"
+              max="4094"
             />
           </div>
           <div className="mt-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
@@ -212,12 +224,29 @@ export function CreateJob() {
                 label="Interval (minutes)"
                 type="number"
                 value={formData.schedule_interval}
-                onChange={(e) => setFormData({ ...formData, schedule_interval: parseInt(e.target.value) })}
-                min="5"
-                placeholder="Minimum 5 minutes"
+                onChange={(e) => setFormData({ ...formData, schedule_interval: parseInt(e.target.value) || 1 })}
+                min="1"
+                max="10080"
+                placeholder="Minimum 1 minute, maximum 1 week"
+                required
               />
             )}
           </div>
+          {formData.schedule_type === 'interval' && (
+            <div className="mt-4 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+              <div className="flex items-start space-x-2">
+                <Info className="h-4 w-4 text-yellow-400 mt-0.5" />
+                <div className="text-sm text-yellow-300">
+                  <p className="font-medium">Automatic Schedule Notes:</p>
+                  <ul className="mt-1 space-y-1 text-yellow-200">
+                    <li>• Minimum interval: 1 minute</li>
+                    <li>• Maximum interval: 1 week (10080 minutes)</li>
+                    <li>• Consider network load when setting frequent intervals</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Retention & Notifications */}

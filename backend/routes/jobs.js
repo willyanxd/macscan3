@@ -218,7 +218,7 @@ export function jobRoutes(app, database, jobScheduler) {
     }
   });
 
-  // Delete job
+  // Delete job - FIXED: Proper error handling and job unscheduling
   app.delete('/api/jobs/:id', async (req, res) => {
     try {
       const { id } = req.params;
@@ -228,16 +228,43 @@ export function jobRoutes(app, database, jobScheduler) {
         return res.status(404).json({ error: 'Job not found' });
       }
 
-      // Unschedule job
-      await jobScheduler.unscheduleJob(id);
+      // Start transaction
+      await database.run('BEGIN TRANSACTION');
 
-      // Delete job (cascade will handle related records)
-      await database.run('DELETE FROM jobs WHERE id = ?', [id]);
+      try {
+        // Unschedule job first (before deletion)
+        try {
+          await jobScheduler.unscheduleJob(id);
+          console.log(`✅ Job ${id} unscheduled successfully`);
+        } catch (scheduleError) {
+          console.error(`⚠️ Warning: Failed to unschedule job ${id}:`, scheduleError);
+          // Continue with deletion even if unscheduling fails
+        }
 
-      res.json({ message: 'Job deleted successfully' });
+        // Delete job (cascade will handle related records)
+        const result = await database.run('DELETE FROM jobs WHERE id = ?', [id]);
+        
+        if (result.changes === 0) {
+          await database.run('ROLLBACK');
+          return res.status(404).json({ error: 'Job not found or already deleted' });
+        }
+
+        await database.run('COMMIT');
+        
+        console.log(`✅ Job ${id} deleted successfully`);
+        res.json({ message: 'Job deleted successfully' });
+        
+      } catch (dbError) {
+        await database.run('ROLLBACK');
+        throw dbError;
+      }
     } catch (error) {
       console.error('Failed to delete job:', error);
-      res.status(500).json({ error: 'Failed to delete job' });
+      res.status(500).json({ 
+        error: 'Failed to delete job', 
+        details: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
     }
   });
 

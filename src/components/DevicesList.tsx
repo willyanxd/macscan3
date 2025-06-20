@@ -12,7 +12,11 @@ import {
   Download,
   UserPlus,
   Network,
-  Building2
+  Building2,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight
 } from 'lucide-react';
 import { api } from '../services/api';
 import { Button } from './Button';
@@ -47,22 +51,40 @@ export function DevicesList({ jobId }: DevicesListProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [editingDevice, setEditingDevice] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalDevices, setTotalDevices] = useState(0);
+  const devicesPerPage = 20;
 
   useEffect(() => {
     fetchDevices();
-  }, [jobId, filter]);
+  }, [jobId, filter, currentPage, searchTerm]);
 
   const fetchDevices = async () => {
     try {
-      const params: any = {};
+      setLoading(true);
+      const params: any = {
+        limit: devicesPerPage,
+        offset: (currentPage - 1) * devicesPerPage
+      };
+      
       if (filter === 'authorized') params.authorized = 'true';
       if (filter === 'unauthorized') params.authorized = 'false';
       if (filter === 'online' || filter === 'offline') params.status = filter;
+      if (searchTerm) params.search = searchTerm;
 
       const response = await api.get(`/jobs/${jobId}/devices`, { params });
       setDevices(response.data);
+      
+      // Get total count for pagination
+      const countResponse = await api.get(`/jobs/${jobId}/devices/count`, { params: { ...params, limit: undefined, offset: undefined } });
+      setTotalDevices(countResponse.data.total || response.data.length);
+      
     } catch (error) {
       console.error('Failed to fetch devices:', error);
+      // If count endpoint doesn't exist, estimate from current data
+      setTotalDevices(devices.length);
     } finally {
       setLoading(false);
     }
@@ -105,7 +127,7 @@ export function DevicesList({ jobId }: DevicesListProps) {
 
     try {
       await api.delete(`/devices/${deviceId}`);
-      setDevices(devices.filter(device => device.id !== deviceId));
+      fetchDevices();
     } catch (error) {
       console.error('Failed to delete device:', error);
     }
@@ -126,7 +148,7 @@ export function DevicesList({ jobId }: DevicesListProps) {
   const exportDevices = () => {
     const csvContent = [
       'MAC Address,Device Name,Vendor,Switch,Interface,Status,Authorization,First Seen,Last Seen',
-      ...filteredDevices.map(device => 
+      ...devices.map(device => 
         `${device.mac_address},${device.device_name || ''},${device.vendor || ''},${device.switch_name},${device.interface_name || ''},${device.status},${device.is_authorized ? 'Authorized' : 'Unauthorized'},${device.first_seen},${device.last_seen}`
       )
     ].join('\n');
@@ -135,18 +157,31 @@ export function DevicesList({ jobId }: DevicesListProps) {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `devices-${jobId}.csv`;
+    a.download = `devices-${jobId}-page-${currentPage}.csv`;
     a.click();
     window.URL.revokeObjectURL(url);
   };
 
-  const filteredDevices = devices.filter(device =>
-    device.mac_address.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (device.device_name && device.device_name.toLowerCase().includes(searchTerm.toLowerCase())) ||
-    (device.vendor && device.vendor.toLowerCase().includes(searchTerm.toLowerCase())) ||
-    device.switch_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (device.interface_name && device.interface_name.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  const handleFilterChange = (newFilter: typeof filter) => {
+    setFilter(newFilter);
+    setCurrentPage(1); // Reset to first page when filter changes
+  };
+
+  const handleSearchChange = (newSearch: string) => {
+    setSearchTerm(newSearch);
+    setCurrentPage(1); // Reset to first page when search changes
+  };
+
+  // Pagination calculations
+  const totalPages = Math.ceil(totalDevices / devicesPerPage);
+  const startIndex = (currentPage - 1) * devicesPerPage + 1;
+  const endIndex = Math.min(currentPage * devicesPerPage, totalDevices);
+
+  const goToPage = (page: number) => {
+    if (page >= 1 && page <= totalPages) {
+      setCurrentPage(page);
+    }
+  };
 
   if (loading) {
     return (
@@ -160,14 +195,14 @@ export function DevicesList({ jobId }: DevicesListProps) {
     <div className="space-y-6">
       {/* Enhanced Filters and Search */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between space-y-4 sm:space-y-0">
-        <div className="flex items-center space-x-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center space-y-4 sm:space-y-0 sm:space-x-4">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
             <input
               type="text"
               placeholder="Search devices..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => handleSearchChange(e.target.value)}
               className="pl-10 pr-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500"
             />
           </div>
@@ -177,7 +212,7 @@ export function DevicesList({ jobId }: DevicesListProps) {
             {['all', 'authorized', 'unauthorized', 'online', 'offline'].map((filterOption) => (
               <button
                 key={filterOption}
-                onClick={() => setFilter(filterOption as any)}
+                onClick={() => handleFilterChange(filterOption as any)}
                 className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors capitalize ${
                   filter === filterOption
                     ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
@@ -190,14 +225,21 @@ export function DevicesList({ jobId }: DevicesListProps) {
           </div>
         </div>
 
-        <Button
-          onClick={exportDevices}
-          variant="outline"
-          className="border-gray-600 text-gray-400 hover:text-white"
-        >
-          <Download className="h-4 w-4 mr-2" />
-          Export CSV
-        </Button>
+        <div className="flex items-center space-x-2">
+          {/* Pagination Info */}
+          <span className="text-sm text-gray-400">
+            {totalDevices > 0 ? `${startIndex}-${endIndex} of ${totalDevices}` : '0 devices'}
+          </span>
+          
+          <Button
+            onClick={exportDevices}
+            variant="outline"
+            className="border-gray-600 text-gray-400 hover:text-white"
+          >
+            <Download className="h-4 w-4 mr-2" />
+            Export CSV
+          </Button>
+        </div>
       </div>
 
       {/* Enhanced Devices Table */}
@@ -230,7 +272,7 @@ export function DevicesList({ jobId }: DevicesListProps) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-700">
-              {filteredDevices.map((device) => (
+              {devices.map((device) => (
                 <tr key={device.id} className="hover:bg-gray-700/30 transition-colors">
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div>
@@ -364,7 +406,89 @@ export function DevicesList({ jobId }: DevicesListProps) {
         </div>
       </div>
 
-      {filteredDevices.length === 0 && (
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between bg-gray-800 rounded-xl border border-gray-700 px-6 py-4">
+          <div className="flex items-center space-x-2">
+            <span className="text-sm text-gray-400">
+              Page {currentPage} of {totalPages}
+            </span>
+          </div>
+          
+          <div className="flex items-center space-x-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => goToPage(1)}
+              disabled={currentPage === 1}
+              className="border-gray-600 text-gray-400 hover:text-white disabled:opacity-50"
+            >
+              <ChevronsLeft className="h-4 w-4" />
+            </Button>
+            
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => goToPage(currentPage - 1)}
+              disabled={currentPage === 1}
+              className="border-gray-600 text-gray-400 hover:text-white disabled:opacity-50"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            
+            {/* Page numbers */}
+            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+              let pageNum;
+              if (totalPages <= 5) {
+                pageNum = i + 1;
+              } else if (currentPage <= 3) {
+                pageNum = i + 1;
+              } else if (currentPage >= totalPages - 2) {
+                pageNum = totalPages - 4 + i;
+              } else {
+                pageNum = currentPage - 2 + i;
+              }
+              
+              return (
+                <Button
+                  key={pageNum}
+                  size="sm"
+                  variant={currentPage === pageNum ? "primary" : "outline"}
+                  onClick={() => goToPage(pageNum)}
+                  className={currentPage === pageNum 
+                    ? "bg-cyan-500 text-white" 
+                    : "border-gray-600 text-gray-400 hover:text-white"
+                  }
+                >
+                  {pageNum}
+                </Button>
+              );
+            })}
+            
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => goToPage(currentPage + 1)}
+              disabled={currentPage === totalPages}
+              className="border-gray-600 text-gray-400 hover:text-white disabled:opacity-50"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => goToPage(totalPages)}
+              disabled={currentPage === totalPages}
+              className="border-gray-600 text-gray-400 hover:text-white disabled:opacity-50"
+            >
+              <ChevronsRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {devices.length === 0 && !loading && (
         <div className="text-center py-12">
           <Shield className="h-12 w-12 text-gray-600 mx-auto mb-4" />
           <h3 className="text-lg font-medium text-gray-300 mb-2">

@@ -43,9 +43,21 @@ export class JobScheduler {
         return;
       }
 
+      // Validate schedule interval
+      if (!job.schedule_interval || job.schedule_interval < 1) {
+        console.error(`❌ Invalid schedule interval for job ${job.id}: ${job.schedule_interval}`);
+        return;
+      }
+
       // Convert interval to cron expression
       const cronExpression = this.intervalToCron(job.schedule_interval);
       
+      // Validate cron expression
+      if (!cron.validate(cronExpression)) {
+        console.error(`❌ Invalid cron expression for job ${job.id}: ${cronExpression}`);
+        return;
+      }
+
       const scheduledJob = cron.schedule(cronExpression, async () => {
         await this.executeJob(job.id);
       }, {
@@ -54,20 +66,26 @@ export class JobScheduler {
       });
 
       this.scheduledJobs.set(job.id, scheduledJob);
-      console.log(`📅 Scheduled job ${job.name} with interval ${job.schedule_interval} minutes`);
+      console.log(`📅 Scheduled job ${job.name} (${job.id}) with interval ${job.schedule_interval} minutes (cron: ${cronExpression})`);
     } catch (error) {
       console.error(`❌ Failed to schedule job ${job.id}:`, error);
     }
   }
 
   intervalToCron(intervalMinutes) {
-    if (intervalMinutes < 60) {
-      return `*/${intervalMinutes} * * * *`;
-    } else if (intervalMinutes < 1440) {
-      const hours = Math.floor(intervalMinutes / 60);
+    // Ensure minimum interval of 1 minute
+    const minutes = Math.max(1, parseInt(intervalMinutes));
+    
+    if (minutes < 60) {
+      // Every X minutes
+      return `*/${minutes} * * * *`;
+    } else if (minutes < 1440) {
+      // Every X hours
+      const hours = Math.floor(minutes / 60);
       return `0 */${hours} * * *`;
     } else {
-      const days = Math.floor(intervalMinutes / 1440);
+      // Every X days
+      const days = Math.floor(minutes / 1440);
       return `0 0 */${days} * *`;
     }
   }
@@ -419,10 +437,18 @@ export class JobScheduler {
   }
 
   async unscheduleJob(jobId) {
-    if (this.scheduledJobs.has(jobId)) {
-      this.scheduledJobs.get(jobId).destroy();
-      this.scheduledJobs.delete(jobId);
-      console.log(`📅 Unscheduled job ${jobId}`);
+    try {
+      if (this.scheduledJobs.has(jobId)) {
+        const scheduledJob = this.scheduledJobs.get(jobId);
+        if (scheduledJob && typeof scheduledJob.destroy === 'function') {
+          scheduledJob.destroy();
+        }
+        this.scheduledJobs.delete(jobId);
+        console.log(`📅 Unscheduled job ${jobId}`);
+      }
+    } catch (error) {
+      console.error(`❌ Failed to unschedule job ${jobId}:`, error);
+      // Don't throw error, just log it
     }
   }
 
@@ -440,7 +466,13 @@ export class JobScheduler {
 
     // Destroy all scheduled jobs
     for (const [jobId, scheduledJob] of this.scheduledJobs) {
-      scheduledJob.destroy();
+      try {
+        if (scheduledJob && typeof scheduledJob.destroy === 'function') {
+          scheduledJob.destroy();
+        }
+      } catch (error) {
+        console.error(`Error destroying scheduled job ${jobId}:`, error);
+      }
     }
     
     this.scheduledJobs.clear();
