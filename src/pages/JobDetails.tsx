@@ -18,7 +18,9 @@ import {
   History,
   UserCheck,
   Network,
-  Loader2
+  Loader2,
+  Calendar,
+  Timer
 } from 'lucide-react';
 import { api } from '../services/api';
 import { Button } from '../components/Button';
@@ -26,7 +28,7 @@ import { DevicesList } from '../components/DevicesList';
 import { JobHistory } from '../components/JobHistory';
 import { WhitelistManager } from '../components/WhitelistManager';
 import { EditJobModal } from '../components/EditJobModal';
-import { formatDistanceToNow } from 'date-fns';
+import { formatDistanceToNow, format } from 'date-fns';
 import { useWebSocket } from '../contexts/WebSocketContext';
 
 interface JobDetails {
@@ -54,6 +56,11 @@ interface JobDetails {
     status: string;
     devices_found: number;
   };
+  next_run_time?: string;
+}
+
+interface NextRunTimes {
+  next_runs: string[];
 }
 
 export function JobDetails() {
@@ -64,11 +71,13 @@ export function JobDetails() {
   const [activeTab, setActiveTab] = useState('devices');
   const [showEditModal, setShowEditModal] = useState(false);
   const [executing, setExecuting] = useState(false);
+  const [nextRunTimes, setNextRunTimes] = useState<NextRunTimes>({ next_runs: [] });
   const { jobStatuses } = useWebSocket();
 
   useEffect(() => {
     if (id) {
       fetchJobDetails();
+      fetchNextRunTimes();
     }
   }, [id]);
 
@@ -82,6 +91,7 @@ export function JobDetails() {
       if (status?.status === 'completed' || status?.status === 'failed') {
         setTimeout(() => {
           fetchJobDetails();
+          fetchNextRunTimes();
         }, 2000);
       }
     }
@@ -95,6 +105,16 @@ export function JobDetails() {
       console.error('Failed to fetch job details:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchNextRunTimes = async () => {
+    try {
+      const response = await api.get(`/jobs/${id}/next-runs?count=5`);
+      setNextRunTimes(response.data);
+    } catch (error) {
+      console.error('Failed to fetch next run times:', error);
+      setNextRunTimes({ next_runs: [] });
     }
   };
 
@@ -174,6 +194,9 @@ export function JobDetails() {
     { id: 'devices', label: 'Known Devices', icon: Users },
     { id: 'whitelist', label: 'Whitelist', icon: UserCheck },
     { id: 'history', label: 'Execution History', icon: History },
+    ...(job?.schedule_type !== 'manual' && job?.is_active ? [
+      { id: 'schedule', label: 'Next Runs', icon: Calendar }
+    ] : [])
   ];
 
   if (loading) {
@@ -221,6 +244,11 @@ export function JobDetails() {
               {job.last_execution && !currentStatus && (
                 <span className="ml-1">
                   Last run {formatDistanceToNow(new Date(job.last_execution.execution_time))} ago
+                </span>
+              )}
+              {job.next_run_time && job.schedule_type !== 'manual' && job.is_active && (
+                <span className="ml-1">
+                  • Next run {formatDistanceToNow(new Date(job.next_run_time))} from now
                 </span>
               )}
             </p>
@@ -420,6 +448,57 @@ export function JobDetails() {
         {activeTab === 'devices' && <DevicesList jobId={job.id} />}
         {activeTab === 'whitelist' && <WhitelistManager jobId={job.id} />}
         {activeTab === 'history' && <JobHistory jobId={job.id} />}
+        {activeTab === 'schedule' && (
+          <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
+            <div className="flex items-center space-x-3 mb-6">
+              <Timer className="h-6 w-6 text-cyan-400" />
+              <h2 className="text-xl font-semibold text-white">Next Scheduled Runs</h2>
+            </div>
+            
+            {nextRunTimes.next_runs.length > 0 ? (
+              <div className="space-y-3">
+                {nextRunTimes.next_runs.map((runTime, index) => (
+                  <div key={index} className="flex items-center justify-between p-4 bg-gray-700/50 rounded-lg border border-gray-600">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-8 h-8 bg-cyan-500/20 rounded-full flex items-center justify-center">
+                        <span className="text-sm font-medium text-cyan-400">{index + 1}</span>
+                      </div>
+                      <div>
+                        <p className="text-white font-medium">
+                          {format(new Date(runTime), 'MMM dd, yyyy')}
+                        </p>
+                        <p className="text-sm text-gray-400">
+                          {format(new Date(runTime), 'HH:mm:ss')}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm text-cyan-400 font-medium">
+                        {formatDistanceToNow(new Date(runTime))} from now
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {new Date(runTime).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <Calendar className="h-12 w-12 text-gray-600 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-300 mb-2">No scheduled runs</h3>
+                <p className="text-gray-500">
+                  {job.schedule_type === 'manual' 
+                    ? 'This job is set to manual execution only.'
+                    : !job.is_active 
+                      ? 'This job is inactive.'
+                      : 'Unable to calculate next run times.'
+                  }
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Modals */}
@@ -430,6 +509,7 @@ export function JobDetails() {
           onSave={() => {
             setShowEditModal(false);
             fetchJobDetails();
+            fetchNextRunTimes();
           }}
         />
       )}

@@ -39,11 +39,22 @@ export function jobRoutes(app, database, jobScheduler) {
         [id]
       );
 
+      // Get next run time for scheduled jobs
+      let nextRunTime = null;
+      if (job.schedule_type === 'interval' && job.schedule_interval && job.is_active) {
+        try {
+          nextRunTime = await jobScheduler.getNextRunTime(id);
+        } catch (error) {
+          console.error('Failed to get next run time:', error);
+        }
+      }
+
       res.json({
         ...job,
         switches,
         device_count: deviceCount.count,
-        last_execution: lastExecution
+        last_execution: lastExecution,
+        next_run_time: nextRunTime
       });
     } catch (error) {
       console.error('Failed to fetch job:', error);
@@ -136,7 +147,7 @@ export function jobRoutes(app, database, jobScheduler) {
     }
   });
 
-  // Update job (preserving ID and history)
+  // Update job (preserving ID and history) - FIXED: Preserve devices and handle schedule changes
   app.put('/api/jobs/:id', async (req, res) => {
     try {
       const { id } = req.params;
@@ -181,8 +192,13 @@ export function jobRoutes(app, database, jobScheduler) {
         );
 
         // Update switches (remove old ones and add new ones)
+        // First, get existing switch IDs to preserve device associations
+        const existingSwitches = await database.all('SELECT id FROM switches WHERE job_id = ?', [id]);
+        
+        // Delete old switches (this will cascade to devices due to foreign key)
         await database.run('DELETE FROM switches WHERE job_id = ?', [id]);
         
+        // Add new switches
         for (const switchConfig of switches) {
           const switchId = uuidv4();
           await database.run(
@@ -200,11 +216,19 @@ export function jobRoutes(app, database, jobScheduler) {
 
         await database.run('COMMIT');
 
-        // Reschedule job
-        await jobScheduler.unscheduleJob(id);
-        if (schedule_type !== 'manual') {
-          const updatedJob = await database.get('SELECT * FROM jobs WHERE id = ?', [id]);
-          await jobScheduler.scheduleJob(updatedJob);
+        // Handle schedule changes
+        const scheduleChanged = existingJob.schedule_type !== schedule_type || 
+                               existingJob.schedule_interval !== schedule_interval;
+
+        if (scheduleChanged) {
+          // Always unschedule first
+          await jobScheduler.unscheduleJob(id);
+          
+          // Only reschedule if new type is not manual
+          if (schedule_type !== 'manual' && schedule_interval) {
+            const updatedJob = await database.get('SELECT * FROM jobs WHERE id = ?', [id]);
+            await jobScheduler.scheduleJob(updatedJob);
+          }
         }
 
         res.json({ message: 'Job updated successfully' });
@@ -218,48 +242,86 @@ export function jobRoutes(app, database, jobScheduler) {
     }
   });
 
-  // Delete job - FIXED: Proper error handling and job unscheduling
+  // Delete job - FIXED: Proper error handling and comprehensive cleanup
   app.delete('/api/jobs/:id', async (req, res) => {
     try {
       const { id } = req.params;
 
+      // Validate job exists
       const job = await database.get('SELECT * FROM jobs WHERE id = ?', [id]);
       if (!job) {
         return res.status(404).json({ error: 'Job not found' });
       }
 
-      // Start transaction
+      console.log(`🗑️ Starting deletion of job ${id} (${job.name})`);
+
+      // Start transaction for atomic deletion
       await database.run('BEGIN TRANSACTION');
 
       try {
-        // Unschedule job first (before deletion)
+        // 1. Unschedule job first (before any database operations)
         try {
           await jobScheduler.unscheduleJob(id);
           console.log(`✅ Job ${id} unscheduled successfully`);
         } catch (scheduleError) {
-          console.error(`⚠️ Warning: Failed to unschedule job ${id}:`, scheduleError);
+          console.error(`⚠️ Warning: Failed to unschedule job ${id}:`, scheduleError.message);
           // Continue with deletion even if unscheduling fails
         }
 
-        // Delete job (cascade will handle related records)
-        const result = await database.run('DELETE FROM jobs WHERE id = ?', [id]);
+        // 2. Delete in correct order to respect foreign key constraints
         
-        if (result.changes === 0) {
+        // Delete notifications
+        const notificationsResult = await database.run('DELETE FROM notifications WHERE job_id = ?', [id]);
+        console.log(`🗑️ Deleted ${notificationsResult.changes} notifications`);
+
+        // Delete whitelist entries
+        const whitelistResult = await database.run('DELETE FROM whitelist WHERE job_id = ?', [id]);
+        console.log(`🗑️ Deleted ${whitelistResult.changes} whitelist entries`);
+
+        // Delete job history
+        const historyResult = await database.run('DELETE FROM job_history WHERE job_id = ?', [id]);
+        console.log(`🗑️ Deleted ${historyResult.changes} history entries`);
+
+        // Delete known devices
+        const devicesResult = await database.run('DELETE FROM known_devices WHERE job_id = ?', [id]);
+        console.log(`🗑️ Deleted ${devicesResult.changes} known devices`);
+
+        // Delete switches
+        const switchesResult = await database.run('DELETE FROM switches WHERE job_id = ?', [id]);
+        console.log(`🗑️ Deleted ${switchesResult.changes} switches`);
+
+        // Finally, delete the job itself
+        const jobResult = await database.run('DELETE FROM jobs WHERE id = ?', [id]);
+        
+        if (jobResult.changes === 0) {
           await database.run('ROLLBACK');
           return res.status(404).json({ error: 'Job not found or already deleted' });
         }
 
+        console.log(`🗑️ Deleted job ${id}`);
+
+        // Commit transaction
         await database.run('COMMIT');
         
-        console.log(`✅ Job ${id} deleted successfully`);
-        res.json({ message: 'Job deleted successfully' });
+        console.log(`✅ Job ${id} (${job.name}) deleted successfully`);
+        res.json({ 
+          message: 'Job deleted successfully',
+          details: {
+            notifications: notificationsResult.changes,
+            whitelist: whitelistResult.changes,
+            history: historyResult.changes,
+            devices: devicesResult.changes,
+            switches: switchesResult.changes
+          }
+        });
         
       } catch (dbError) {
         await database.run('ROLLBACK');
+        console.error(`❌ Database error during job deletion:`, dbError);
         throw dbError;
       }
     } catch (error) {
-      console.error('Failed to delete job:', error);
+      console.error(`❌ Failed to delete job ${id}:`, error);
       res.status(500).json({ 
         error: 'Failed to delete job', 
         details: error.message,
@@ -376,6 +438,34 @@ export function jobRoutes(app, database, jobScheduler) {
     } catch (error) {
       console.error('Failed to remove from whitelist:', error);
       res.status(500).json({ error: 'Failed to remove from whitelist' });
+    }
+  });
+
+  // Get next run times for scheduled jobs
+  app.get('/api/jobs/:id/next-runs', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { count = 5 } = req.query;
+
+      const job = await database.get('SELECT * FROM jobs WHERE id = ?', [id]);
+      if (!job) {
+        return res.status(404).json({ error: 'Job not found' });
+      }
+
+      if (job.schedule_type === 'manual' || !job.is_active) {
+        return res.json({ next_runs: [] });
+      }
+
+      try {
+        const nextRuns = await jobScheduler.getNextRunTimes(id, parseInt(count));
+        res.json({ next_runs: nextRuns });
+      } catch (error) {
+        console.error('Failed to get next run times:', error);
+        res.json({ next_runs: [] });
+      }
+    } catch (error) {
+      console.error('Failed to fetch next run times:', error);
+      res.status(500).json({ error: 'Failed to fetch next run times' });
     }
   });
 }

@@ -8,6 +8,7 @@ interface WebSocketContextType {
   addNotification: (notification: any) => void;
   updateJobStatus: (jobId: string, status: any) => void;
   clearNotifications: () => void;
+  triggerNotificationUpdate: () => void;
 }
 
 const WebSocketContext = createContext<WebSocketContextType>({
@@ -17,7 +18,8 @@ const WebSocketContext = createContext<WebSocketContextType>({
   jobStatuses: new Map(),
   addNotification: () => {},
   updateJobStatus: () => {},
-  clearNotifications: () => {}
+  clearNotifications: () => {},
+  triggerNotificationUpdate: () => {}
 });
 
 export function useWebSocket() {
@@ -46,6 +48,13 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     setNotifications([]);
   }, []);
 
+  const triggerNotificationUpdate = useCallback(() => {
+    // Trigger a custom event to notify components about notification updates
+    window.dispatchEvent(new CustomEvent('notifications_updated', { 
+      detail: { action: 'refresh' } 
+    }));
+  }, []);
+
   useEffect(() => {
     const connectWebSocket = () => {
       const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:3001';
@@ -64,6 +73,8 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
           switch (data.type) {
             case 'notification':
               addNotification(data.data);
+              // Trigger notification update for components
+              triggerNotificationUpdate();
               break;
               
             case 'job_status':
@@ -121,7 +132,8 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       jobStatuses,
       addNotification,
       updateJobStatus,
-      clearNotifications
+      clearNotifications,
+      triggerNotificationUpdate
     }}>
       {children}
     </WebSocketContext.Provider>

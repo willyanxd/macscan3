@@ -32,6 +32,8 @@ export function useNotifications() {
         setUnreadCount(0);
         setTotalCount(0);
       }
+      // Refresh counts to ensure accuracy
+      fetchNotificationCounts();
     };
 
     window.addEventListener('notifications_updated', handleNotificationsUpdated as EventListener);
@@ -55,6 +57,8 @@ export function useNotifications() {
     try {
       await api.put(`/notifications/${notificationId}/read`);
       setUnreadCount(prev => Math.max(0, prev - 1));
+      // Refresh counts to ensure accuracy
+      await fetchNotificationCounts();
     } catch (error) {
       console.error('Failed to mark notification as read:', error);
     }
@@ -64,6 +68,8 @@ export function useNotifications() {
     try {
       await api.put('/notifications/read-all');
       setUnreadCount(0);
+      // Refresh counts to ensure accuracy
+      await fetchNotificationCounts();
     } catch (error) {
       console.error('Failed to mark all notifications as read:', error);
     }
@@ -73,9 +79,8 @@ export function useNotifications() {
     try {
       await api.delete(`/notifications/${notificationId}`);
       setTotalCount(prev => Math.max(0, prev - 1));
-      // Note: We don't know if the deleted notification was read or not,
-      // so we refresh the counts to be accurate
-      fetchNotificationCounts();
+      // Refresh counts to ensure accuracy
+      await fetchNotificationCounts();
     } catch (error) {
       console.error('Failed to delete notification:', error);
     }
@@ -86,6 +91,8 @@ export function useNotifications() {
       await api.delete('/notifications');
       setUnreadCount(0);
       setTotalCount(0);
+      // Refresh counts to ensure accuracy
+      await fetchNotificationCounts();
     } catch (error) {
       console.error('Failed to delete all notifications:', error);
     }

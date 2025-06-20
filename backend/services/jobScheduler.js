@@ -40,6 +40,7 @@ export class JobScheduler {
       }
 
       if (job.schedule_type === 'manual') {
+        console.log(`📅 Job ${job.name} (${job.id}) set to manual - not scheduling`);
         return;
       }
 
@@ -87,6 +88,108 @@ export class JobScheduler {
       // Every X days
       const days = Math.floor(minutes / 1440);
       return `0 0 */${days} * *`;
+    }
+  }
+
+  // Get next run time for a scheduled job
+  async getNextRunTime(jobId) {
+    const scheduledJob = this.scheduledJobs.get(jobId);
+    if (!scheduledJob) {
+      return null;
+    }
+
+    try {
+      const job = await this.database.get('SELECT * FROM jobs WHERE id = ?', [jobId]);
+      if (!job || job.schedule_type === 'manual' || !job.is_active) {
+        return null;
+      }
+
+      const cronExpression = this.intervalToCron(job.schedule_interval);
+      const nextRun = this.getNextCronDate(cronExpression);
+      return nextRun ? nextRun.toISOString() : null;
+    } catch (error) {
+      console.error(`Failed to get next run time for job ${jobId}:`, error);
+      return null;
+    }
+  }
+
+  // Get multiple next run times
+  async getNextRunTimes(jobId, count = 5) {
+    try {
+      const job = await this.database.get('SELECT * FROM jobs WHERE id = ?', [jobId]);
+      if (!job || job.schedule_type === 'manual' || !job.is_active) {
+        return [];
+      }
+
+      const cronExpression = this.intervalToCron(job.schedule_interval);
+      const nextRuns = [];
+      let currentDate = new Date();
+
+      for (let i = 0; i < count; i++) {
+        const nextRun = this.getNextCronDate(cronExpression, currentDate);
+        if (nextRun) {
+          nextRuns.push(nextRun.toISOString());
+          currentDate = new Date(nextRun.getTime() + 60000); // Add 1 minute to get next occurrence
+        } else {
+          break;
+        }
+      }
+
+      return nextRuns;
+    } catch (error) {
+      console.error(`Failed to get next run times for job ${jobId}:`, error);
+      return [];
+    }
+  }
+
+  // Calculate next cron execution date
+  getNextCronDate(cronExpression, fromDate = new Date()) {
+    try {
+      // Parse cron expression (minute hour day month dayOfWeek)
+      const parts = cronExpression.split(' ');
+      if (parts.length !== 5) return null;
+
+      const [minutePart, hourPart, dayPart, monthPart, dayOfWeekPart] = parts;
+      
+      let nextDate = new Date(fromDate);
+      nextDate.setSeconds(0, 0);
+      nextDate.setMinutes(nextDate.getMinutes() + 1); // Start from next minute
+
+      // Simple implementation for interval-based cron expressions
+      if (minutePart.startsWith('*/')) {
+        const interval = parseInt(minutePart.substring(2));
+        const currentMinute = nextDate.getMinutes();
+        const nextMinute = Math.ceil(currentMinute / interval) * interval;
+        
+        if (nextMinute >= 60) {
+          nextDate.setHours(nextDate.getHours() + 1);
+          nextDate.setMinutes(0);
+        } else {
+          nextDate.setMinutes(nextMinute);
+        }
+      } else if (hourPart.startsWith('*/')) {
+        const interval = parseInt(hourPart.substring(2));
+        const currentHour = nextDate.getHours();
+        const nextHour = Math.ceil(currentHour / interval) * interval;
+        
+        if (nextHour >= 24) {
+          nextDate.setDate(nextDate.getDate() + 1);
+          nextDate.setHours(0);
+        } else {
+          nextDate.setHours(nextHour);
+        }
+        nextDate.setMinutes(0);
+      } else if (dayPart.startsWith('*/')) {
+        const interval = parseInt(dayPart.substring(2));
+        nextDate.setDate(nextDate.getDate() + interval);
+        nextDate.setHours(0);
+        nextDate.setMinutes(0);
+      }
+
+      return nextDate;
+    } catch (error) {
+      console.error('Error calculating next cron date:', error);
+      return null;
     }
   }
 
@@ -445,10 +548,12 @@ export class JobScheduler {
         }
         this.scheduledJobs.delete(jobId);
         console.log(`📅 Unscheduled job ${jobId}`);
+        return true;
       }
+      return false;
     } catch (error) {
       console.error(`❌ Failed to unschedule job ${jobId}:`, error);
-      // Don't throw error, just log it
+      return false;
     }
   }
 
