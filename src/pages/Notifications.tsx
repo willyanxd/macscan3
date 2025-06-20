@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Bell, CheckCircle, AlertTriangle, Info, XCircle, Trash2, AreaChart as MarkAsUnread } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Bell, CheckCircle, AlertTriangle, Info, XCircle, Trash2, MarkAsUnread, ExternalLink, Trash } from 'lucide-react';
 import { api } from '../services/api';
 import { Button } from '../components/Button';
 import { formatDistanceToNow } from 'date-fns';
+import { useNotifications } from '../hooks/useNotifications';
 
 interface Notification {
   id: string;
@@ -20,9 +22,23 @@ export function Notifications() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'unread'>('all');
+  const { markAsRead, markAllAsRead, deleteNotification, deleteAllNotifications } = useNotifications();
 
   useEffect(() => {
     fetchNotifications();
+  }, [filter]);
+
+  useEffect(() => {
+    // Listen for notification updates from WebSocket
+    const handleNotificationsUpdated = () => {
+      fetchNotifications();
+    };
+
+    window.addEventListener('notifications_updated', handleNotificationsUpdated);
+    
+    return () => {
+      window.removeEventListener('notifications_updated', handleNotificationsUpdated);
+    };
   }, [filter]);
 
   const fetchNotifications = async () => {
@@ -37,33 +53,30 @@ export function Notifications() {
     }
   };
 
-  const markAsRead = async (notificationId: string) => {
-    try {
-      await api.put(`/notifications/${notificationId}/read`);
-      setNotifications(notifications.map(notif => 
-        notif.id === notificationId ? { ...notif, is_read: true } : notif
-      ));
-    } catch (error) {
-      console.error('Failed to mark notification as read:', error);
-    }
+  const handleMarkAsRead = async (notificationId: string) => {
+    await markAsRead(notificationId);
+    setNotifications(notifications.map(notif => 
+      notif.id === notificationId ? { ...notif, is_read: true } : notif
+    ));
   };
 
-  const deleteNotification = async (notificationId: string) => {
-    try {
-      await api.delete(`/notifications/${notificationId}`);
-      setNotifications(notifications.filter(notif => notif.id !== notificationId));
-    } catch (error) {
-      console.error('Failed to delete notification:', error);
-    }
+  const handleDeleteNotification = async (notificationId: string) => {
+    await deleteNotification(notificationId);
+    setNotifications(notifications.filter(notif => notif.id !== notificationId));
   };
 
-  const markAllAsRead = async () => {
-    try {
-      await api.put('/notifications/read-all');
-      setNotifications(notifications.map(notif => ({ ...notif, is_read: true })));
-    } catch (error) {
-      console.error('Failed to mark all notifications as read:', error);
+  const handleMarkAllAsRead = async () => {
+    await markAllAsRead();
+    setNotifications(notifications.map(notif => ({ ...notif, is_read: true })));
+  };
+
+  const handleDeleteAllNotifications = async () => {
+    if (!confirm('Are you sure you want to delete all notifications? This action cannot be undone.')) {
+      return;
     }
+    
+    await deleteAllNotifications();
+    setNotifications([]);
   };
 
   const getIcon = (severity: string) => {
@@ -135,14 +148,25 @@ export function Notifications() {
             </button>
           </div>
           
-          <Button
-            onClick={markAllAsRead}
-            variant="outline"
-            className="border-gray-600 text-gray-400 hover:text-white"
-          >
-            <MarkAsUnread className="h-4 w-4 mr-2" />
-            Mark All Read
-          </Button>
+          <div className="flex items-center space-x-2">
+            <Button
+              onClick={handleMarkAllAsRead}
+              variant="outline"
+              className="border-gray-600 text-gray-400 hover:text-white"
+            >
+              <MarkAsUnread className="h-4 w-4 mr-2" />
+              Mark All Read
+            </Button>
+            
+            <Button
+              onClick={handleDeleteAllNotifications}
+              variant="outline"
+              className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+            >
+              <Trash className="h-4 w-4 mr-2" />
+              Delete All
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -184,11 +208,17 @@ export function Notifications() {
                 </p>
                 
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <span className="text-xs text-gray-500">Job:</span>
-                    <span className="text-xs font-medium text-cyan-400">
-                      {notification.job_name}
-                    </span>
+                  <div className="flex items-center space-x-4">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs text-gray-500">Job:</span>
+                      <Link 
+                        to={`/jobs/${notification.job_id}`}
+                        className="text-xs font-medium text-cyan-400 hover:text-cyan-300 transition-colors flex items-center space-x-1"
+                      >
+                        <span>{notification.job_name}</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
+                    </div>
                   </div>
                   
                   <div className="flex items-center space-x-2">
@@ -196,7 +226,7 @@ export function Notifications() {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => markAsRead(notification.id)}
+                        onClick={() => handleMarkAsRead(notification.id)}
                         className="border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10"
                       >
                         <CheckCircle className="h-3 w-3 mr-1" />
@@ -206,7 +236,7 @@ export function Notifications() {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => deleteNotification(notification.id)}
+                      onClick={() => handleDeleteNotification(notification.id)}
                       className="border-red-500/30 text-red-400 hover:bg-red-500/10"
                     >
                       <Trash2 className="h-3 w-3" />

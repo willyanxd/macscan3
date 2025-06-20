@@ -79,6 +79,12 @@ export class JobScheduler {
     const startTime = Date.now();
     this.runningJobs.add(jobId);
 
+    // Broadcast job start status
+    await this.notificationService.broadcastJobStatus(jobId, 'running', {
+      message: 'Job execution started',
+      startTime: new Date().toISOString()
+    });
+
     try {
       // Get job details
       const job = await this.database.get('SELECT * FROM jobs WHERE id = ?', [jobId]);
@@ -103,10 +109,27 @@ export class JobScheduler {
       let unauthorizedDevices = 0;
       const errors = [];
 
+      // Broadcast progress updates
+      await this.notificationService.broadcastJobStatus(jobId, 'scanning', {
+        message: `Scanning ${switches.length} switches...`,
+        switchCount: switches.length,
+        currentSwitch: 0
+      });
+
       // Scan each switch via SNMP
-      for (const switchConfig of switches) {
+      for (let i = 0; i < switches.length; i++) {
+        const switchConfig = switches[i];
+        
         try {
           console.log(`🔍 Scanning switch: ${switchConfig.name} (${switchConfig.host})`);
+          
+          // Broadcast current switch being scanned
+          await this.notificationService.broadcastJobStatus(jobId, 'scanning', {
+            message: `Scanning switch: ${switchConfig.name}`,
+            switchCount: switches.length,
+            currentSwitch: i + 1,
+            switchName: switchConfig.name
+          });
           
           const scanResult = await this.snmpService.scanMacAddresses(
             {
@@ -156,6 +179,15 @@ export class JobScheduler {
       // Send notifications
       await this.sendJobNotifications(job, newDevices, unauthorizedDevices);
 
+      // Broadcast job completion
+      await this.notificationService.broadcastJobStatus(jobId, 'completed', {
+        message: 'Job completed successfully',
+        devicesFound: totalDevicesFound,
+        newDevices,
+        unauthorizedDevices,
+        duration: Date.now() - startTime
+      });
+
       console.log(`✅ Job ${job.name} completed successfully`);
 
     } catch (error) {
@@ -170,6 +202,12 @@ export class JobScheduler {
         error.message,
         Date.now() - startTime
       );
+
+      // Broadcast job failure
+      await this.notificationService.broadcastJobStatus(jobId, 'failed', {
+        message: `Job failed: ${error.message}`,
+        error: error.message
+      });
 
       // Send error notification
       await this.notificationService.createNotification({

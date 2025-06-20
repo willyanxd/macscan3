@@ -29,7 +29,7 @@ app.use((req, res, next) => {
 
 // Initialize services
 const database = new Database();
-const notificationService = new NotificationService();
+const notificationService = new NotificationService(database);
 const jobScheduler = new JobScheduler(database, notificationService);
 
 // Create HTTP server
@@ -46,6 +46,12 @@ const wss = new WebSocketServer({
 
 wss.on('connection', (ws, req) => {
   console.log(`Client connected to WebSocket from ${req.socket.remoteAddress}`);
+  
+  // Send initial connection confirmation
+  ws.send(JSON.stringify({
+    type: 'connection',
+    data: { status: 'connected', timestamp: new Date().toISOString() }
+  }));
   
   ws.on('close', () => {
     console.log('Client disconnected from WebSocket');

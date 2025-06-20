@@ -17,7 +17,8 @@ import {
   List,
   History,
   UserCheck,
-  Network
+  Network,
+  Loader2
 } from 'lucide-react';
 import { api } from '../services/api';
 import { Button } from '../components/Button';
@@ -26,6 +27,7 @@ import { JobHistory } from '../components/JobHistory';
 import { WhitelistManager } from '../components/WhitelistManager';
 import { EditJobModal } from '../components/EditJobModal';
 import { formatDistanceToNow } from 'date-fns';
+import { useWebSocket } from '../contexts/WebSocketContext';
 
 interface JobDetails {
   id: string;
@@ -62,12 +64,28 @@ export function JobDetails() {
   const [activeTab, setActiveTab] = useState('devices');
   const [showEditModal, setShowEditModal] = useState(false);
   const [executing, setExecuting] = useState(false);
+  const { jobStatuses } = useWebSocket();
 
   useEffect(() => {
     if (id) {
       fetchJobDetails();
     }
   }, [id]);
+
+  // Monitor job execution status
+  useEffect(() => {
+    if (id && jobStatuses.has(id)) {
+      const status = jobStatuses.get(id);
+      setExecuting(status?.status === 'running' || status?.status === 'scanning');
+      
+      // Refresh job details when execution completes
+      if (status?.status === 'completed' || status?.status === 'failed') {
+        setTimeout(() => {
+          fetchJobDetails();
+        }, 2000);
+      }
+    }
+  }, [id, jobStatuses]);
 
   const fetchJobDetails = async () => {
     try {
@@ -86,13 +104,8 @@ export function JobDetails() {
     setExecuting(true);
     try {
       await api.post(`/jobs/${id}/execute`);
-      // Show success notification
-      setTimeout(() => {
-        fetchJobDetails(); // Refresh data after execution
-      }, 2000);
     } catch (error) {
       console.error('Failed to execute job:', error);
-    } finally {
       setExecuting(false);
     }
   };
@@ -128,6 +141,35 @@ export function JobDetails() {
     }
   };
 
+  const getJobStatus = () => {
+    if (!id) return null;
+    const status = jobStatuses.get(id);
+    if (!status) return null;
+    
+    switch (status.status) {
+      case 'running':
+        return { icon: Loader2, text: 'Starting execution...', color: 'text-blue-400', spin: true };
+      case 'scanning':
+        return { 
+          icon: Loader2, 
+          text: status.switchName ? `Scanning ${status.switchName} (${status.currentSwitch}/${status.switchCount})` : 'Scanning switches...', 
+          color: 'text-cyan-400', 
+          spin: true 
+        };
+      case 'completed':
+        return { 
+          icon: CheckCircle, 
+          text: `Completed - Found ${status.devicesFound || 0} devices`, 
+          color: 'text-green-400', 
+          spin: false 
+        };
+      case 'failed':
+        return { icon: XCircle, text: `Failed: ${status.error || 'Unknown error'}`, color: 'text-red-400', spin: false };
+      default:
+        return null;
+    }
+  };
+
   const tabs = [
     { id: 'devices', label: 'Known Devices', icon: Users },
     { id: 'whitelist', label: 'Whitelist', icon: UserCheck },
@@ -156,6 +198,8 @@ export function JobDetails() {
     );
   }
 
+  const currentStatus = getJobStatus();
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -174,7 +218,7 @@ export function JobDetails() {
             </h1>
             <p className="text-gray-400 mt-1">
               VLAN {job.vlan_id} • {job.switches.length} switches • 
-              {job.last_execution && (
+              {job.last_execution && !currentStatus && (
                 <span className="ml-1">
                   Last run {formatDistanceToNow(new Date(job.last_execution.execution_time))} ago
                 </span>
@@ -195,10 +239,19 @@ export function JobDetails() {
           <Button
             onClick={executeJob}
             disabled={executing}
-            className="bg-green-600 hover:bg-green-700 disabled:opacity-50"
+            className={`${executing ? 'bg-gray-600' : 'bg-green-600 hover:bg-green-700'} disabled:opacity-50`}
           >
-            <Play className="h-4 w-4 mr-2" />
-            {executing ? 'Running...' : 'Run Now'}
+            {executing ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Running...
+              </>
+            ) : (
+              <>
+                <Play className="h-4 w-4 mr-2" />
+                Run Now
+              </>
+            )}
           </Button>
           
           <Button
@@ -219,6 +272,19 @@ export function JobDetails() {
           </Button>
         </div>
       </div>
+
+      {/* Current Job Status */}
+      {currentStatus && (
+        <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
+          <div className="flex items-center space-x-3">
+            <currentStatus.icon className={`h-5 w-5 ${currentStatus.color} ${currentStatus.spin ? 'animate-spin' : ''}`} />
+            <div>
+              <h3 className="text-lg font-semibold text-white">Job Status</h3>
+              <p className={`text-sm ${currentStatus.color}`}>{currentStatus.text}</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Job Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -269,7 +335,7 @@ export function JobDetails() {
       </div>
 
       {/* Last Execution Status */}
-      {job.last_execution && (
+      {job.last_execution && !currentStatus && (
         <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
           <h3 className="text-lg font-semibold text-white mb-4">Last Execution</h3>
           <div className="flex items-center justify-between">
